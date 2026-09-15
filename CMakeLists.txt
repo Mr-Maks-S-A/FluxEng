@@ -1,11 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(
-    FixedFloat
+    FluxBornEng
     VERSION 0.1.0
-    DESCRIPTION "Deterministic Fixed-Point Math Library for Fluxborn Engine"
+    DESCRIPTION "Fluxborn Engine"
     LANGUAGES CXX
 )
 
+
+include(CTest)
 
 # ------------------------------------------------------------------------------
 # 1. УСКОРЕНИЕ СБОРКИ (ccache)
@@ -30,5 +32,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-add_subdirectory("${CMAKE_SOURCE_DIR}/Modules")
-#add_subdirectory("${CMAKE_SOURCE_DIR}/Src")
+add_subdirectory( "${CMAKE_SOURCE_DIR}/ExternalLibrary" )
+add_subdirectory( "${CMAKE_SOURCE_DIR}/Modules" )
+
