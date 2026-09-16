@@ -34,4 +34,5 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 add_subdirectory( "${CMAKE_SOURCE_DIR}/ExternalLibrary" )
 add_subdirectory( "${CMAKE_SOURCE_DIR}/Modules" )
+add_subdirectory( "${CMAKE_SOURCE_DIR}/Sandbox" )
 

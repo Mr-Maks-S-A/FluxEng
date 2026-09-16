@@ -31,6 +31,10 @@ set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 
+
+# glm (отключаем сборку тестов и установки)
+set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
 # ------------------------------------------------------------------------------
 # Добавление поддиректорий
 # ------------------------------------------------------------------------------
@@ -40,7 +44,8 @@ add_subdirectory(spdlog)
 add_subdirectory(benchmark)
 add_subdirectory(glad)
 add_subdirectory(glfw)
-
+add_subdirectory(glm)
+add_subdirectory(stb)
 
 # ------------------------------------------------------------------------------
 # Создание интерфейсной библиотеки-обертки для удобного подключения в проект
@@ -54,4 +59,6 @@ target_link_libraries(ExternalLibrary INTERFACE
     benchmark::benchmark
     glad
     glfw
+    glm::glm
+    stb
 )
