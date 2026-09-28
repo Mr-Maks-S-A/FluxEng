@@ -1,0 +1,46 @@
+# Doxyfile для модуля RendererSystem.
+# Генерируется CMake (configure_file) в каталог сборки; запуск: cmake --build . --target RendererSystemDocs
+
+PROJECT_NAME           = "FluxEng RendererSystem"
+PROJECT_NUMBER         = @PROJECT_VERSION@
+PROJECT_BRIEF          = "2D-рендер движка FluxEng: батчи, камера, анимации, OpenGL 3.3"
+OUTPUT_DIRECTORY       = @RENDERERSYSTEM_DOCS_OUTPUT@
+OUTPUT_LANGUAGE        = Russian
+CREATE_SUBDIRS         = NO
+
+INPUT                  = @CMAKE_CURRENT_SOURCE_DIR@/docs/mainpage.md \
+                         @CMAKE_CURRENT_SOURCE_DIR@/src/include
+FILE_PATTERNS          = *.hpp *.md
+RECURSIVE              = YES
+USE_MDFILE_AS_MAINPAGE = @CMAKE_CURRENT_SOURCE_DIR@/docs/mainpage.md
+STRIP_FROM_PATH        = @CMAKE_CURRENT_SOURCE_DIR@/src/include
+STRIP_FROM_INC_PATH    = @CMAKE_CURRENT_SOURCE_DIR@/src/include
+
+EXAMPLE_PATH           = @CMAKE_CURRENT_SOURCE_DIR@/examples
+EXAMPLE_PATTERNS       = *.cpp
+
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+HIDE_UNDOC_MEMBERS     = NO
+EXCLUDE_SYMBOLS        = detail detail::*
+INTERNAL_DOCS          = NO
+JAVADOC_AUTOBRIEF      = NO
+MARKDOWN_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+SORT_MEMBER_DOCS       = NO
+
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_TREEVIEW      = YES
+GENERATE_LATEX         = NO
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+HAVE_DOT               = NO

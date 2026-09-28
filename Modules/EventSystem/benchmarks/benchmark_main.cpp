@@ -1,183 +1,309 @@
+/**
+ * @file benchmark_main.cpp
+ * @brief Бенчмарки EventSystem (google-benchmark).
+ *
+ * Группы:
+ * 1. Запись: типизированный emit в AoS/SoA, сырой emit_raw, базовая линия std::vector.
+ * 2. Чтение: все поля и одно поле, AoS против SoA. Честное сравнение раскладок:
+ *    SoA выигрывает на одном поле и проигрывает или равна AoS на всех полях.
+ * 3. Накладные расходы шины: advance_tick на многих каналах, получение писателя.
+ *
+ * Запуск: `EventSystemBenchmarks --benchmark_filter=Read`.
+ * Для осмысленных цифр собирайте в Release.
+ */
+
+#include <EventSystem/EventSystem.hpp>
+
 #include <benchmark/benchmark.h>
 
-#include <EventSystem/Bus/EventBus.hpp>
-#include <EventSystem/Core/DeterministicTypeRegistry.hpp>
-#include <EventSystem/Core/FNV1a.hpp>
-#include <EventSystem/Storage/SoAEventBucket.hpp>
-
 #include <cstdint>
-#include <numeric>
-#include <random>
+#include <cstring>
+#include <string>
 #include <string_view>
 #include <vector>
 
+namespace {
+
+namespace es = EventSystem;
+
 // =============================================================================
-// 0. РЕГИСТРАЦИЯ ТИПОВ ДЛЯ БЕНЧМАРКА
+// События для замеров: одинаковые данные, разная раскладка.
 // =============================================================================
 
-using BenchmarkSmallSoA = EventSystem::Storage::SoAEventBucket<uint32_t, float>;
-using BenchmarkPhysicsSoA = EventSystem::Storage::SoAEventBucket<uint64_t, double, double, double>;
+struct PhysicsAoS {
+    std::uint64_t entity = 0;
+    double x = 0.0, y = 0.0, z = 0.0;
 
-struct PhysicsEventAoS {
-    uint64_t entity_id;
-    double x, y, z;
+    static constexpr std::string_view event_name = "bench.physics_aos";
+    using fields = es::Fields<
+        es::Field<"entity", &PhysicsAoS::entity>,
+        es::Field<"x", &PhysicsAoS::x>,
+        es::Field<"y", &PhysicsAoS::y>,
+        es::Field<"z", &PhysicsAoS::z>>;
 };
 
-REGISTER_EVENT_TYPE(BenchmarkSmallSoA)
-REGISTER_EVENT_TYPE(BenchmarkPhysicsSoA)
+struct PhysicsSoA {
+    std::uint64_t entity = 0;
+    double x = 0.0, y = 0.0, z = 0.0;
 
-// =============================================================================
-// 1. БЕНЧМАРК ХЭШИРОВАНИЯ И РЕГИСТРАЦИИ (Compile-Time)
-// =============================================================================
+    static constexpr std::string_view event_name = "bench.physics_soa";
+    static constexpr es::Layout layout = es::Layout::SoA;
+    using fields = es::Fields<
+        es::Field<"entity", &PhysicsSoA::entity>,
+        es::Field<"x", &PhysicsSoA::x>,
+        es::Field<"y", &PhysicsSoA::y>,
+        es::Field<"z", &PhysicsSoA::z>>;
+};
 
-static void BM_Core_FNV1a_CompileTime(benchmark::State& state) {
-    for (auto _ : state) {
-        // Локальная не-const переменная, чтобы удовлетворить DoNotOptimize без deprecation warning
-        auto hash = EventSystem::Core::FNV1a::hash("BenchmarkPhysicsSoA");
-        benchmark::DoNotOptimize(hash);
-    }
+/// Типичное событие вокселей: 16 байт, массовое.
+struct VoxelChanged {
+    std::int32_t x = 0, y = 0, z = 0;
+    std::uint32_t block = 0;
+
+    static constexpr std::string_view event_name = "bench.voxel_changed";
+    static constexpr es::Layout layout = es::Layout::SoA;
+    using fields = es::Fields<
+        es::Field<"x", &VoxelChanged::x>,
+        es::Field<"y", &VoxelChanged::y>,
+        es::Field<"z", &VoxelChanged::z>,
+        es::Field<"block", &VoxelChanged::block>>;
+};
+
+template<typename E>
+E make_physics(std::uint64_t i) {
+    const double d = static_cast<double>(i);
+    return E{.entity = i, .x = d, .y = d * 0.5, .z = d * 0.25};
 }
-BENCHMARK(BM_Core_FNV1a_CompileTime);
 
-static void BM_Core_DeterministicTypeRegistry_GetId(benchmark::State& state) {
-    for (auto _ : state) {
-        auto id = EventSystem::Core::DeterministicTypeRegistry::get_id<BenchmarkPhysicsSoA>();
-        benchmark::DoNotOptimize(id);
+/// Шина с одним каналом `E`, в которой уже видно `count` событий.
+template<typename E>
+es::EventBus make_filled_bus(std::size_t count) {
+    es::EventBus bus;
+    bus.register_event<E>(es::ChannelConfig{.reserve = count});
+    auto writer = bus.writer<E>();
+    for (std::size_t i = 0; i < count; ++i) {
+        writer.emit(make_physics<E>(i));
     }
+    bus.advance_tick();
+    return bus;
 }
-BENCHMARK(BM_Core_DeterministicTypeRegistry_GetId);
+
+constexpr std::int64_t min_events = 1 << 10;
+constexpr std::int64_t max_events = 1 << 18;
 
 // =============================================================================
-// 2. БЕНЧМАРКИ ЗАПИСИ (EMIT / PUSH) И ПАМЯТИ
+// 1. Запись
 // =============================================================================
 
-static void BM_SoAEventBucket_Push_Direct(benchmark::State& state) {
-    BenchmarkPhysicsSoA bucket;
-    bucket.reserve(state.range(0));
-
-    uint64_t id = 0;
+void BM_Baseline_VectorPushBack(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    std::vector<PhysicsAoS> events;
+    events.reserve(count);
     for (auto _ : state) {
-        bucket.push(id++, 1.0, 2.0, 3.0);
-        if (bucket.size() >= static_cast<size_t>(state.range(0))) {
-            state.PauseTiming();
-            bucket.clear();
-            state.ResumeTiming();
+        for (std::size_t i = 0; i < count; ++i) {
+            events.push_back(make_physics<PhysicsAoS>(i));
         }
-    }
-    state.SetItemsProcessed(state.iterations());
-    state.counters["AllocatedBytes"] = benchmark::Counter(
-        static_cast<double>(bucket.allocated_bytes()), benchmark::Counter::kDefaults);
-}
-BENCHMARK(BM_SoAEventBucket_Push_Direct)->Range(1024, 1 << 18);
-
-static void BM_EventBus_Emit_Reserved(benchmark::State& state) {
-    EventSystem::Bus::EventBus bus;
-    const size_t reserve_cap = state.range(0);
-    bus.register_event<BenchmarkPhysicsSoA>(reserve_cap);
-
-    uint64_t id = 0;
-    for (auto _ : state) {
-        bus.emit<BenchmarkPhysicsSoA>(id++, 10.0, 20.0, 30.0);
-
-        auto* bucket = bus.get_bucket<BenchmarkPhysicsSoA>();
-        if (bucket && bucket->size() >= reserve_cap) {
-            state.PauseTiming();
-            bucket->clear();
-            state.ResumeTiming();
-        }
-    }
-
-    auto* bucket = bus.get_bucket<BenchmarkPhysicsSoA>();
-    state.SetItemsProcessed(state.iterations());
-    state.counters["AllocatedBytes"] = benchmark::Counter(
-        static_cast<double>(bucket ? bucket->allocated_bytes() : 0), benchmark::Counter::kDefaults);
-}
-BENCHMARK(BM_EventBus_Emit_Reserved)->Range(1024, 1 << 18);
-
-static void BM_EventBus_Emit_Unreserved(benchmark::State& state) {
-    for (auto _ : state) {
-        state.PauseTiming();
-        EventSystem::Bus::EventBus bus;
-        bus.register_event<BenchmarkPhysicsSoA>(0);
-        state.ResumeTiming();
-
-        for (int i = 0; i < state.range(0); ++i) {
-            bus.emit<BenchmarkPhysicsSoA>(static_cast<uint64_t>(i), 1.0, 2.0, 3.0);
-        }
-        
-        benchmark::DoNotOptimize(bus);
+        benchmark::DoNotOptimize(events.data());
+        events.clear();
     }
     state.SetItemsProcessed(state.iterations() * state.range(0));
 }
-BENCHMARK(BM_EventBus_Emit_Unreserved)->Range(1000, 100000);
+BENCHMARK(BM_Baseline_VectorPushBack)->Range(min_events, max_events);
 
-// =============================================================================
-// 3. БЕНЧМАРК ЧТЕНИЯ И ИТЕРАЦИИ: SoA vs AoS (Кэш-эффективность)
-// =============================================================================
-
-static void BM_Read_SingleField_SoA(benchmark::State& state) {
-    const size_t count = state.range(0);
-    BenchmarkPhysicsSoA bucket;
-    bucket.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        bucket.push(i, 1.5, 2.5, 3.5);
+template<typename E>
+void BM_Emit(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus;
+    bus.register_event<E>(es::ChannelConfig{.reserve = count});
+    auto writer = bus.writer<E>();
+    for (auto _ : state) {
+        for (std::size_t i = 0; i < count; ++i) {
+            writer.emit(make_physics<E>(i));
+        }
+        bus.advance_tick(); // O(1): обмен буферов без аллокаций
     }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_Emit<PhysicsAoS>)->Name("BM_Emit_AoS")->Range(min_events, max_events);
+BENCHMARK(BM_Emit<PhysicsSoA>)->Name("BM_Emit_SoA")->Range(min_events, max_events);
 
+template<typename E>
+void BM_EmitRaw(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus;
+    es::IChannel& channel = bus.register_event<E>(es::ChannelConfig{.reserve = count});
+    for (auto _ : state) {
+        for (std::size_t i = 0; i < count; ++i) {
+            const E event = make_physics<E>(i);
+            channel.emit_raw(reinterpret_cast<const std::byte*>(&event));
+        }
+        bus.advance_tick();
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_EmitRaw<PhysicsAoS>)->Name("BM_EmitRaw_AoS")->Range(min_events, max_events);
+BENCHMARK(BM_EmitRaw<PhysicsSoA>)->Name("BM_EmitRaw_SoA")->Range(min_events, max_events);
+
+void BM_Emit_Unreserved(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    for (auto _ : state) {
+        state.PauseTiming();
+        es::EventBus bus;
+        bus.register_event<VoxelChanged>();
+        auto writer = bus.writer<VoxelChanged>();
+        state.ResumeTiming();
+
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto v = static_cast<std::int32_t>(i);
+            writer.emit(VoxelChanged{.x = v, .y = v, .z = v, .block = 1});
+        }
+        benchmark::DoNotOptimize(writer.pending_count());
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_Emit_Unreserved)->Range(min_events, max_events);
+
+// =============================================================================
+// 2. Чтение
+// =============================================================================
+
+void BM_ReadAllFields_AoS(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus = make_filled_bus<PhysicsAoS>(count);
+    const auto reader = bus.reader<PhysicsAoS>();
     for (auto _ : state) {
         double sum = 0.0;
-        auto x_stream = bucket.get_stream<1>();
-        for (double x : x_stream) {
+        for (const PhysicsAoS& e : reader.events()) {
+            sum += static_cast<double>(e.entity) + e.x + e.y + e.z;
+        }
+        benchmark::DoNotOptimize(sum);
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+    state.SetBytesProcessed(state.iterations() * state.range(0) * static_cast<std::int64_t>(sizeof(PhysicsAoS)));
+}
+BENCHMARK(BM_ReadAllFields_AoS)->Range(min_events, max_events);
+
+void BM_ReadAllFields_SoA(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus = make_filled_bus<PhysicsSoA>(count);
+    const auto reader = bus.reader<PhysicsSoA>();
+    for (auto _ : state) {
+        const auto entity = reader.column<&PhysicsSoA::entity>();
+        const auto xs = reader.column<&PhysicsSoA::x>();
+        const auto ys = reader.column<&PhysicsSoA::y>();
+        const auto zs = reader.column<&PhysicsSoA::z>();
+        double sum = 0.0;
+        for (std::size_t i = 0; i < reader.size(); ++i) {
+            sum += static_cast<double>(entity[i]) + xs[i] + ys[i] + zs[i];
+        }
+        benchmark::DoNotOptimize(sum);
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+    state.SetBytesProcessed(state.iterations() * state.range(0) * static_cast<std::int64_t>(sizeof(PhysicsSoA)));
+}
+BENCHMARK(BM_ReadAllFields_SoA)->Range(min_events, max_events);
+
+void BM_ReadAllFields_SoA_ForEach(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus = make_filled_bus<PhysicsSoA>(count);
+    const auto reader = bus.reader<PhysicsSoA>();
+    for (auto _ : state) {
+        double sum = 0.0;
+        reader.for_each([&](const PhysicsSoA& e) { sum += static_cast<double>(e.entity) + e.x + e.y + e.z; });
+        benchmark::DoNotOptimize(sum);
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_ReadAllFields_SoA_ForEach)->Range(min_events, max_events);
+
+void BM_ReadOneField_AoS(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus = make_filled_bus<PhysicsAoS>(count);
+    const auto reader = bus.reader<PhysicsAoS>();
+    for (auto _ : state) {
+        double sum = 0.0;
+        for (const PhysicsAoS& e : reader.events()) {
+            sum += e.x;
+        }
+        benchmark::DoNotOptimize(sum);
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_ReadOneField_AoS)->Range(min_events, max_events);
+
+void BM_ReadOneField_SoA(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus = make_filled_bus<PhysicsSoA>(count);
+    const auto reader = bus.reader<PhysicsSoA>();
+    for (auto _ : state) {
+        double sum = 0.0;
+        for (const double x : reader.column<&PhysicsSoA::x>()) {
             sum += x;
         }
         benchmark::DoNotOptimize(sum);
     }
-    state.SetItemsProcessed(state.iterations() * count);
-    state.SetBytesProcessed(state.iterations() * count * sizeof(double));
+    state.SetItemsProcessed(state.iterations() * state.range(0));
 }
-BENCHMARK(BM_Read_SingleField_SoA)->Range(10000, 1000000);
+BENCHMARK(BM_ReadOneField_SoA)->Range(min_events, max_events);
 
-static void BM_Read_SingleField_AoS_Baseline(benchmark::State& state) {
-    const size_t count = state.range(0);
-    std::vector<PhysicsEventAoS> bucket;
-    bucket.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        bucket.push_back({i, 1.5, 2.5, 3.5});
-    }
-
+void BM_ReadOneField_Raw(benchmark::State& state) {
+    // Путь скриптов: поле ищется по имени один раз, затем читается через field_data().
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus = make_filled_bus<PhysicsSoA>(count);
+    const es::EventBuffer& buffer = bus.find("bench.physics_soa")->readable();
+    const std::size_t field = *buffer.schema().field_index("x");
     for (auto _ : state) {
         double sum = 0.0;
-        for (const auto& event : bucket) {
-            sum += event.x;
+        for (std::size_t i = 0; i < buffer.size(); ++i) {
+            double x = 0.0;
+            std::memcpy(&x, buffer.field_data(i, field), sizeof(double));
+            sum += x;
         }
         benchmark::DoNotOptimize(sum);
     }
-    state.SetItemsProcessed(state.iterations() * count);
-    state.SetBytesProcessed(state.iterations() * count * sizeof(PhysicsEventAoS));
+    state.SetItemsProcessed(state.iterations() * state.range(0));
 }
-BENCHMARK(BM_Read_SingleField_AoS_Baseline)->Range(10'000, 1'000'000);
+BENCHMARK(BM_ReadOneField_Raw)->Range(min_events, max_events);
 
 // =============================================================================
-// 4. БЕНЧМАРК ОЧИСТКИ (CLEAR & RESET OVERHEAD)
+// 3. Накладные расходы шины
 // =============================================================================
 
-static void BM_EventBus_ClearAll(benchmark::State& state) {
-    EventSystem::Bus::EventBus bus;
-    bus.register_event<BenchmarkSmallSoA>(10000);
-    bus.register_event<BenchmarkPhysicsSoA>(10000);
-
+void BM_AdvanceTick(benchmark::State& state) {
+    // Много каналов, в каждом немного событий: стоимость смены тика.
+    const auto channels = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus;
+    std::vector<es::EventSchema> schemas;
+    schemas.reserve(channels);
+    for (std::size_t c = 0; c < channels; ++c) {
+        es::EventSchema schema = es::schema_of<VoxelChanged>();
+        schema.name = "bench.channel_" + std::to_string(c);
+        schema.id = es::make_event_id(schema.name);
+        bus.register_schema(schema, es::ChannelConfig{.reserve = 16});
+    }
+    const VoxelChanged event{};
     for (auto _ : state) {
-        state.PauseTiming();
-        for (int i = 0; i < 1000; ++i) {
-            bus.emit<BenchmarkSmallSoA>(static_cast<uint32_t>(i), 1.0f);
-            bus.emit<BenchmarkPhysicsSoA>(static_cast<uint64_t>(i), 1.0, 2.0, 3.0);
+        for (std::size_t c = 0; c < channels; ++c) {
+            bus.channel_at(c).emit_raw(reinterpret_cast<const std::byte*>(&event));
         }
-        state.ResumeTiming();
+        bus.advance_tick();
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_AdvanceTick)->Range(8, 1024);
 
-        bus.clear_all();
-        benchmark::DoNotOptimize(bus);
+void BM_AcquireWriter(benchmark::State& state) {
+    // Цена получения писателя: поиск канала + сравнение схем.
+    // Поэтому писатель получают один раз, а не на каждый emit.
+    es::EventBus bus;
+    bus.register_event<PhysicsSoA>();
+    for (auto _ : state) {
+        auto writer = bus.writer<PhysicsSoA>();
+        benchmark::DoNotOptimize(writer);
     }
 }
-// Жестко ограничиваем запуск, например, 10 000 итерациями
-BENCHMARK(BM_EventBus_ClearAll)->Iterations(10000);
+BENCHMARK(BM_AcquireWriter);
+
+} // namespace
 
 BENCHMARK_MAIN();
