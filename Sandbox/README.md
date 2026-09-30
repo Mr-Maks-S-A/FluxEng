@@ -1,13 +1,14 @@
 # Sandbox — объединяющий проект FluxEng
 
-Две маленькие симуляции на EventSystem + RendererSystem + WindowSystem. Цель — увидеть API
-модулей в настоящем игровом коде и понять, чего им не хватает.
+Три маленькие симуляции на модулях движка (Core, EventSystem, RendererSystem, WindowSystem).
+Цель — увидеть API модулей в настоящем игровом коде и понять, чего им не хватает.
 
 | Цель | Что это | Что показывает |
 |---|---|---|
 | `engine::Core` (Modules/Core) | слой приложения: окно, рендер, шина, фиксированный тик, пауза/скорость, ввод → события | как модули склеиваются в игровой цикл |
 | `FallingSand` | песок, вода, камень, дерево, огонь | массовые SoA-события, два производителя одного события, эффекты с анимацией |
 | `Colony` | упрощённый RimWorld: колонисты, ресурсы, склад, хроника | цепочки событий между 6 модулями, атлас, анимации в SoA, граф и циклы |
+| `Ecosystem` | трава, зайцы, лисы: популяции колеблются | рождения и смерти, ссылки с поколением (`Handle`), модули-структуры, интерполяция между тиками |
 
 ## Запуск
 
@@ -16,9 +17,10 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
 build/bin/FallingSand
 build/bin/Colony
+build/bin/Ecosystem
 build/bin/Colony --frames 600 --screenshot colony.png   # 600 кадров, скриншот, выход
 build/bin/Colony --ticks 375                             # ровно 375 тиков: детерминированный прогон
-ctest --test-dir build -L sandbox                        # smoke-тесты обеих игр
+ctest --test-dir build -L sandbox                        # smoke-тесты всех игр
 ```
 
 На старте каждая игра печатает граф событий и пишет `<Имя>_events.dot`
@@ -35,6 +37,42 @@ ctest --test-dir build -L sandbox                        # smoke-тесты об
 - **FallingSand:** ЛКМ — рисовать, ПКМ — стирать, **1–5** — материал, **[ / ]** — размер кисти.
 - **Colony:** ЛКМ — посадить дерево, ПКМ — положить камень, **J** — линии заданий.
   Полосы слева сверху — брёвна и камень на складе (засечка каждые 10).
+- **Ecosystem:** ЛКМ — выпустить 10 зайцев, ПКМ — выпустить 3 лис. Справа внизу — график численности
+  (светлая линия — зайцы, оранжевая — лисы). Каждые 300 тиков Census печатает сводку в консоль;
+  `stale hunts` в заголовке — охоты, отброшенные проверкой поколения.
+
+## Как написать новую игру
+
+Игра — это `Core::Game` и одна строка в `main()`. Модули игры удобно делать структурами
+(как в Ecosystem): свои порты, свои данные, `declare()` с контрактом и `tick()`, куда чужие
+данные приходят как `const&`.
+
+```cpp
+#include <Core/Core.hpp>
+
+struct Pinged { std::uint32_t id = 0;
+    static constexpr std::string_view event_name = "demo.pinged";
+    using fields = EventSystem::Fields<EventSystem::Field<"id", &Pinged::id>>; };
+
+struct Pinger {
+    EventSystem::EventWriter<Pinged> out;
+    void declare(EventSystem::EventBus& bus) { out = bus.writer<Pinged>(bus.declare_module("Pinger").produces<Pinged>()); }
+    void tick(EventSystem::Tick now) { out.emit({.id = static_cast<std::uint32_t>(now)}); }
+};
+
+class Demo final : public Core::Game {
+    Pinger pinger;
+    glm::vec2 world_size() const override { return {640, 360}; }
+    void setup(Core::App& app) override { pinger.declare(app.bus()); }
+    void tick(Core::App& app) override { pinger.tick(app.tick()); }
+    void render(Core::App&, RendererSystem::Renderer2D&) override {}
+};
+
+int main(int argc, char** argv) { return Core::run<Demo>({.title = "Demo"}, argc, argv); }
+```
+
+Добавить цель — одна строка в `foreach(game IN ITEMS ...)` в `Sandbox/CMakeLists.txt` и папка
+`<snake_case>/main.cpp`.
 
 ## Что нужно дорабатывать (найдено в процессе)
 
@@ -84,3 +122,5 @@ ctest --test-dir build -L sandbox                        # smoke-тесты об
 
 - Модули читают общие данные напрямую (список ресурсов, позиции колонистов). Это место ECS:
   события сообщают *что случилось*, компоненты хранят *как есть сейчас*.
+- Ecosystem вручную делает то, что должен дать ECS: `Handle` с поколением, пул слотов (Life)
+  и SoA-массивы вида с таблицей «слот → строка» (Herd). Подробности — `!TODO/CONSPECT_2.md`.
