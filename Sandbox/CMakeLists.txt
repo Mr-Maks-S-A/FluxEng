@@ -25,7 +25,7 @@ foreach(game IN ITEMS FallingSand Colony Ecosystem)
     string(REGEX REPLACE "([a-z])([A-Z])" "\\1_\\2" folder "${game}")
     string(TOLOWER "${folder}" folder)
     add_executable(${game} ${folder}/main.cpp)
-    target_link_libraries(${game} PRIVATE engine::Core SandboxWarnings)
+    target_link_libraries(${game} PRIVATE engine::Core engine::ECSSystem SandboxWarnings)
 
     if(BUILD_TESTING)
         # Smoke-тест с GPU: открыть окно, прожить 300 тиков (по одному на кадр), выйти без ошибок.
