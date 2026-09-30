@@ -17,12 +17,14 @@
 #include <Core/PlatformEvents.hpp>
 
 #include <EventSystem/EventSystem.hpp>
+#include <MemorySystem/MemorySystem.hpp>
 #include <RendererSystem/RendererSystem.hpp>
 #include <WindowSystem/Window.hpp> // окно, ввод; подключает glad + GLFW
 
 #include <array>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Core {
 
@@ -38,9 +40,10 @@ struct AppConfig {
     int max_ticks = -1;                    ///< Выйти через N тиков; включает lockstep: один тик на кадр,
                                            ///< поэтому прогон детерминирован и не зависит от скорости машины.
     std::string screenshot{};              ///< Сохранить последний кадр в PNG (пусто — не сохранять).
+    std::vector<std::string> extra_args{}; ///< Аргументы, которые Core не разобрал (для самой игры), по порядку.
 };
 
-/// @brief Разбирает `--frames N`, `--ticks N` и `--screenshot file.png` из командной строки.
+/// @brief Разбирает `--frames N`, `--ticks N` и `--screenshot file.png`; остальное кладёт в `extra_args`.
 [[nodiscard]] AppConfig parse_args(AppConfig config, int argc, char** argv);
 
 /// @brief Состояние мыши за текущий кадр.
@@ -75,6 +78,9 @@ public:
 
     /// @brief Строка состояния для заголовка окна.
     [[nodiscard]] virtual std::string status() const { return {}; }
+
+    /// @brief Конец работы (после последнего кадра, до отчёта шины): итоги, сводки.
+    virtual void shutdown(App& /*app*/) {}
 };
 
 /**
@@ -115,6 +121,21 @@ public:
     /// @brief Доля пути к следующему тику, [0, 1): отрисовка может интерполировать движение.
     [[nodiscard]] float tick_alpha() const noexcept { return m_step.alpha(); }
 
+    /// @brief Параметры запуска (включая `extra_args` для игры).
+    [[nodiscard]] const AppConfig& config() const noexcept { return m_config; }
+
+    /**
+     * @brief Память текущего тика (MemorySystem::DoubleArena::current()).
+     *
+     * Всё, что выделено здесь в тике N, читается в тике N+1 через previous_tick_arena()
+     * и освобождается (обнуляется) после него — та же модель, что у событий шины.
+     */
+    [[nodiscard]] MemorySystem::Arena& tick_arena() noexcept { return m_tick_memory.current(); }
+    /// @brief Память прошлого тика: только чтение.
+    [[nodiscard]] const MemorySystem::Arena& previous_tick_arena() const noexcept { return m_tick_memory.previous(); }
+    /// @brief Временная память кадра (отрисовка, оверлей): очищается в начале каждого кадра.
+    [[nodiscard]] MemorySystem::Arena& frame_arena() noexcept { return m_frame_memory; }
+
     /// @brief Печатает граф событий, предупреждения и статистику каналов.
     void print_event_report() const;
 
@@ -137,6 +158,8 @@ private:
     EventSystem::EventWriter<MouseButtonEvent> m_mouse_out;
 
     FixedStep m_step;
+    MemorySystem::DoubleArena m_tick_memory = MemorySystem::DoubleArena::reserve(MemorySystem::MiB(256));
+    MemorySystem::Arena m_frame_memory = MemorySystem::Arena::reserve(MemorySystem::MiB(64));
 };
 
 } // namespace Core

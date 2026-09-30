@@ -26,13 +26,17 @@ using namespace RendererSystem;
 namespace es = EventSystem;
 
 AppConfig parse_args(AppConfig config, int argc, char** argv) {
-    for (int i = 1; i + 1 < argc; ++i) {
-        if (std::string_view(argv[i]) == "--frames") {
-            config.max_frames = std::atoi(argv[i + 1]);
-        } else if (std::string_view(argv[i]) == "--ticks") {
-            config.max_ticks = std::atoi(argv[i + 1]);
-        } else if (std::string_view(argv[i]) == "--screenshot") {
-            config.screenshot = argv[i + 1];
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view arg = argv[i];
+        const bool has_value = i + 1 < argc;
+        if (arg == "--frames" && has_value) {
+            config.max_frames = std::atoi(argv[++i]);
+        } else if (arg == "--ticks" && has_value) {
+            config.max_ticks = std::atoi(argv[++i]);
+        } else if (arg == "--screenshot" && has_value) {
+            config.screenshot = argv[++i];
+        } else {
+            config.extra_args.emplace_back(arg); // игре: например, --agents 100000
         }
     }
     return config;
@@ -152,6 +156,7 @@ int App::run(Game& game) {
 
     for (int frame = 0; !m_window.should_close(); ++frame) {
         m_window.poll_events(); // ввод этого кадра: InputState + подписчики (клавиши → шина)
+        m_frame_memory.reset();
         const double now = WindowSystem::Window::time();
         const double frame_dt = std::min(now - last, 0.25);
         last = now;
@@ -166,6 +171,7 @@ int App::run(Game& game) {
         for (int steps = m_step.advance(frame_dt); steps > 0; --steps) {
             game.tick(*this);
             m_bus.advance_tick();
+            m_tick_memory.swap(); // память тика N доступна в N+1 как previous, затем очищается
         }
 
         const bool last_frame = (m_config.max_frames >= 0 && frame + 1 >= m_config.max_frames) ||
@@ -201,6 +207,7 @@ int App::run(Game& game) {
         }
     }
 
+    game.shutdown(*this);
     std::println("\n===== {} : finished at tick {} =====", m_config.title, m_bus.current_tick());
     print_event_report();
     return 0;

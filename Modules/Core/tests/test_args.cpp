@@ -33,7 +33,18 @@ TEST_CASE("parse_args: --frames, --ticks, --screenshot") {
     CHECK(config.screenshot == "out.png");
 }
 
-TEST_CASE("parse_args: флаг без значения игнорируется") {
+TEST_CASE("parse_args: флаг без значения остаётся игре") {
     const Core::AppConfig config = parse({"--frames"});
     CHECK(config.max_frames == -1);
+    REQUIRE(config.extra_args.size() == 1);
+    CHECK(config.extra_args[0] == "--frames");
+}
+
+TEST_CASE("parse_args: неизвестные аргументы — игре, по порядку") {
+    const Core::AppConfig config = parse({"--agents", "50000", "--ticks", "10", "--quiet"});
+    CHECK(config.max_ticks == 10);
+    REQUIRE(config.extra_args.size() == 3);
+    CHECK(config.extra_args[0] == "--agents");
+    CHECK(config.extra_args[1] == "50000");
+    CHECK(config.extra_args[2] == "--quiet");
 }
