@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 project(
     FluxBornEng
     VERSION 0.1.0
@@ -8,6 +8,11 @@ project(
 
 
 include(CTest)
+
+# Режим разработчика: собирать тесты, бенчмарки и примеры всех модулей.
+# По умолчанию включён, когда FluxEng — главный проект, и выключен, когда его
+# подключили в чужой проект через add_subdirectory().
+option(FLUX_DEVELOPER "Собирать тесты, бенчмарки и примеры всех модулей" ${PROJECT_IS_TOP_LEVEL})
 
 # ------------------------------------------------------------------------------
 # 1. УСКОРЕНИЕ СБОРКИ (ccache)

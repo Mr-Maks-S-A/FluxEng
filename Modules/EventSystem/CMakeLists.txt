@@ -1,12 +1,18 @@
 cmake_minimum_required(VERSION 3.25)
 project(EventSystem VERSION 0.1.0 LANGUAGES CXX)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FluxModule.cmake")
+
 # ==============================================================================
 # Опции модуля
+#
+# Тесты, бенчмарки и примеры включены по умолчанию при самостоятельной сборке
+# (cmake -S Modules/EventSystem) и в режиме разработчика движка (FLUX_DEVELOPER).
+# Зависимостей, кроме стандартной библиотеки C++, у модуля нет.
 # ==============================================================================
-option(EVENTSYSTEM_BUILD_TESTS      "Собирать тесты EventSystem"                  ON)
-option(EVENTSYSTEM_BUILD_BENCHMARKS "Собирать бенчмарки EventSystem"              ON)
-option(EVENTSYSTEM_BUILD_EXAMPLES   "Собирать примеры EventSystem"                ON)
+flux_module_option(EVENTSYSTEM_BUILD_TESTS      "Собирать тесты EventSystem")
+flux_module_option(EVENTSYSTEM_BUILD_BENCHMARKS "Собирать бенчмарки EventSystem")
+flux_module_option(EVENTSYSTEM_BUILD_EXAMPLES   "Собирать примеры EventSystem")
 option(EVENTSYSTEM_BUILD_DOCS       "Цель EventSystemDocs (нужен Doxygen)"        ON)
 option(EVENTSYSTEM_SANITIZE         "Собирать EventSystem с ASan и UBSan"         OFF)
 
@@ -55,10 +61,12 @@ target_link_libraries(EventSystem PRIVATE $<BUILD_INTERFACE:EventSystemOptions>)
 # ==============================================================================
 if(EVENTSYSTEM_BUILD_TESTS)
     enable_testing()
+    flux_external(doctest)
     add_subdirectory(tests)
 endif()
 
 if(EVENTSYSTEM_BUILD_BENCHMARKS)
+    flux_external(benchmark)
     add_subdirectory(benchmarks)
 endif()
 

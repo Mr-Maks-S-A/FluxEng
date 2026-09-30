@@ -27,10 +27,9 @@ else()
     target_compile_options(SandboxCore PUBLIC -Wall -Wextra -Wpedantic -Wshadow)
 endif()
 
-# Заголовки сторонних библиотек и WindowSystem — системные, их предупреждения не наши.
-foreach(dependency IN ITEMS glfw glm::glm glad stb engine::WindowSystem)
-    target_include_directories(SandboxCore SYSTEM PUBLIC $<TARGET_PROPERTY:${dependency},INTERFACE_INCLUDE_DIRECTORIES>)
-endforeach()
+# Сторонние библиотеки уже подключены как SYSTEM (cmake/FluxModule.cmake).
+# Заголовок WindowSystem пока не чист под -Wshadow/-Wpedantic — тоже системный.
+target_include_directories(SandboxCore SYSTEM PUBLIC $<TARGET_PROPERTY:engine::WindowSystem,INTERFACE_INCLUDE_DIRECTORIES>)
 
 foreach(game IN ITEMS FallingSand Colony)
     string(REGEX REPLACE "([a-z])([A-Z])" "\\1_\\2" folder "${game}")

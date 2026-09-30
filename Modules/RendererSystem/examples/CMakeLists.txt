@@ -1,11 +1,10 @@
 # Примеры. 03 работает без GPU; 01 и 02 используют окно движка (engine::WindowSystem)
-# и собираются, только если модуль WindowSystem подключён в Modules/CMakeLists.txt.
+# и собираются, только если модуль WindowSystem доступен (его подключает flux_module).
 
 function(renderersystem_add_example name)
     set(target RendererSystemExample_${name})
     add_executable(${target} ${name}.cpp)
     target_link_libraries(${target} PRIVATE engine::RendererSystem RendererSystemOptions ${ARGN})
-    renderersystem_system_includes(${target} ${ARGN})
 endfunction()
 
 renderersystem_add_example(03_data_oriented_frame)

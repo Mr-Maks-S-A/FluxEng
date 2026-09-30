@@ -6,7 +6,6 @@ target_link_libraries(RendererSystemBenchmarks PRIVATE
     benchmark::benchmark
     glfw
 )
-renderersystem_system_includes(RendererSystemBenchmarks glfw benchmark::benchmark)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     if(MSVC)

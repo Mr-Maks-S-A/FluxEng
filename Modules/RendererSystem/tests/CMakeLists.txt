@@ -20,14 +20,5 @@ target_link_libraries(RendererSystemTests PRIVATE
     glfw
     stb
 )
-renderersystem_system_includes(RendererSystemTests glfw stb doctest::doctest)
 
-if(DEFINED doctest_SOURCE_DIR)
-    list(APPEND CMAKE_MODULE_PATH "${doctest_SOURCE_DIR}/scripts/cmake")
-endif()
-include(doctest OPTIONAL RESULT_VARIABLE DOCTEST_INCLUDED)
-if(DOCTEST_INCLUDED)
-    doctest_discover_tests(RendererSystemTests TEST_PREFIX "RendererSystem.")
-else()
-    add_test(NAME RendererSystem.unit COMMAND RendererSystemTests)
-endif()
+flux_doctest_discover(RendererSystemTests RendererSystem)

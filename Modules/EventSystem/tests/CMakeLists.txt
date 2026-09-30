@@ -17,16 +17,8 @@ target_link_libraries(EventSystemTests PRIVATE
     doctest::doctest
 )
 
-if(DEFINED doctest_SOURCE_DIR)
-    list(APPEND CMAKE_MODULE_PATH "${doctest_SOURCE_DIR}/scripts/cmake")
-endif()
-include(doctest OPTIONAL RESULT_VARIABLE DOCTEST_INCLUDED)
-if(DOCTEST_INCLUDED)
-    # Каждый TEST_CASE становится отдельным тестом CTest.
-    doctest_discover_tests(EventSystemTests TEST_PREFIX "EventSystem.")
-else()
-    add_test(NAME EventSystem.unit COMMAND EventSystemTests)
-endif()
+# Каждый TEST_CASE становится отдельным тестом CTest.
+flux_doctest_discover(EventSystemTests EventSystem)
 
 # ==============================================================================
 # Тесты «не должно компилироваться»

@@ -1,51 +1,18 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.25)
 project(ExternalLibrary CXX)
 
 # ------------------------------------------------------------------------------
-# Опции внешних библиотек (отключаем лишнее, чтобы сократить время сборки)
+# Сторонние библиотеки движка.
+#
+# Опции каждой библиотеки (что выключить, чтобы не собирать лишнее) заданы
+# в cmake/FluxModule.cmake, в flux_external(). Модули, собранные сами по себе,
+# подключают библиотеки той же функцией — поэтому настройки одни и те же.
 # ------------------------------------------------------------------------------
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/FluxModule.cmake")
 
-# doctest
-set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
-set(DOCTEST_WITH_TESTS OFF CACHE BOOL "" FORCE)
-
-# fmt
-set(FMT_INSTALL OFF CACHE BOOL "" FORCE)
-set(FMT_TEST OFF CACHE BOOL "" FORCE)
-
-# spdlog
-set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
-set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE) # Заставляет spdlog использовать внешний fmt
-
-
-# benchmark
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
-
-# glfw (отключаем лишнее)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-
-
-# glm (отключаем сборку тестов и установки)
-set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
-# ------------------------------------------------------------------------------
-# Добавление поддиректорий
-# ------------------------------------------------------------------------------
-add_subdirectory(doctest)
-add_subdirectory(fmt)
-add_subdirectory(spdlog)
-add_subdirectory(benchmark)
-add_subdirectory(glad)
-add_subdirectory(glfw)
-add_subdirectory(glm)
-add_subdirectory(stb)
+foreach(library IN ITEMS doctest fmt spdlog benchmark glad glfw glm stb)
+    flux_external(${library})
+endforeach()
 
 # ------------------------------------------------------------------------------
 # Создание интерфейсной библиотеки-обертки для удобного подключения в проект

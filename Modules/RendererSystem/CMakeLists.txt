@@ -1,12 +1,17 @@
 cmake_minimum_required(VERSION 3.25)
 project(RendererSystem VERSION 0.1.0 LANGUAGES CXX)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FluxModule.cmake")
+
 # ==============================================================================
 # Опции модуля
+#
+# Тесты, бенчмарки и примеры включены по умолчанию при самостоятельной сборке
+# (cmake -S Modules/RendererSystem) и в режиме разработчика движка (FLUX_DEVELOPER).
 # ==============================================================================
-option(RENDERERSYSTEM_BUILD_TESTS      "Собирать тесты RendererSystem"            ON)
-option(RENDERERSYSTEM_BUILD_BENCHMARKS "Собирать бенчмарки RendererSystem"        ON)
-option(RENDERERSYSTEM_BUILD_EXAMPLES   "Собирать примеры RendererSystem"          ON)
+flux_module_option(RENDERERSYSTEM_BUILD_TESTS      "Собирать тесты RendererSystem")
+flux_module_option(RENDERERSYSTEM_BUILD_BENCHMARKS "Собирать бенчмарки RendererSystem")
+flux_module_option(RENDERERSYSTEM_BUILD_EXAMPLES   "Собирать примеры RendererSystem")
 option(RENDERERSYSTEM_BUILD_DOCS       "Цель RendererSystemDocs (нужен Doxygen)"  ON)
 option(RENDERERSYSTEM_SANITIZE         "Собирать RendererSystem с ASan и UBSan"   OFF)
 
@@ -28,21 +33,17 @@ if(RENDERERSYSTEM_SANITIZE AND NOT MSVC)
     target_link_options(RendererSystemOptions INTERFACE -fsanitize=address,undefined)
 endif()
 
-# Заголовки сторонних библиотек подключаются как системные: строгие предупреждения
-# модуля относятся только к нашему коду.
-function(renderersystem_system_includes target)
-    foreach(dependency IN LISTS ARGN)
-        target_include_directories(${target} SYSTEM PRIVATE
-            $<TARGET_PROPERTY:${dependency},INTERFACE_INCLUDE_DIRECTORIES>)
-    endforeach()
-endfunction()
-
 # ==============================================================================
 # Библиотека
 #
 # Зависимости: только glm, glad и stb. Окно и GLFW библиотеке не нужны —
-# ей достаточно текущего OpenGL-контекста.
+# ей достаточно текущего OpenGL-контекста. Сторонние библиотеки подключены
+# как SYSTEM (см. flux_external), их предупреждения не смешиваются с нашими.
 # ==============================================================================
+flux_external(glm)
+flux_external(glad)
+flux_external(stb)
+
 add_library(RendererSystem STATIC
     src/code/Animation.cpp
     src/code/Camera2D.cpp
@@ -65,21 +66,26 @@ target_link_libraries(RendererSystem
     PUBLIC  glm::glm glad
     PRIVATE stb $<BUILD_INTERFACE:RendererSystemOptions>
 )
-renderersystem_system_includes(RendererSystem glm::glm glad stb)
 
 # ==============================================================================
 # Тесты, бенчмарки, примеры, документация
 # ==============================================================================
 if(RENDERERSYSTEM_BUILD_TESTS)
     enable_testing()
+    flux_external(doctest)
+    flux_external(glfw)
     add_subdirectory(tests)
 endif()
 
 if(RENDERERSYSTEM_BUILD_BENCHMARKS)
+    flux_external(benchmark)
+    flux_external(glfw)
     add_subdirectory(benchmarks)
 endif()
 
 if(RENDERERSYSTEM_BUILD_EXAMPLES)
+    # Примеры 01 и 02 открывают окно через WindowSystem.
+    flux_module(WindowSystem)
     add_subdirectory(examples)
 endif()
 
