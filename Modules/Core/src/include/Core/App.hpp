@@ -18,7 +18,7 @@
 
 #include <EventSystem/EventSystem.hpp>
 #include <RendererSystem/RendererSystem.hpp>
-#include <WindowSystem/Window.hpp> // glad + GLFW
+#include <WindowSystem/Window.hpp> // окно, ввод; подключает glad + GLFW
 
 #include <array>
 #include <optional>
@@ -84,6 +84,9 @@ public:
  * - Space — пауза, `=` / `-` — скорость x1…x8;
  * - WASD / стрелки — сдвиг камеры, колесо — зум к курсору;
  * - F1 — напечатать граф событий и статистику каналов; Esc — выход.
+ *
+ * Ввод берётся из WindowSystem: клавиши приходят подпиской на `events().key`
+ * (и уходят в шину как `platform.key`), мышь и колесо — из `input()` за кадр.
  */
 class App {
 public:
@@ -99,7 +102,7 @@ public:
     [[nodiscard]] EventSystem::EventBus& bus() noexcept { return m_bus; }
     [[nodiscard]] RendererSystem::Renderer2D& renderer() noexcept { return *m_renderer; }
     [[nodiscard]] RendererSystem::Camera2D& camera() noexcept { return m_camera; }
-    [[nodiscard]] Window& window() noexcept { return m_window; }
+    [[nodiscard]] WindowSystem::Window& window() noexcept { return m_window; }
     [[nodiscard]] const FrameInput& input() const noexcept { return m_input; }
 
     /// @brief Модуль "Platform": производитель KeyEvent и MouseButtonEvent.
@@ -123,7 +126,7 @@ private:
     void save_screenshot(int width, int height) const;
 
     AppConfig m_config;
-    Window m_window;                                       // окно (и GL-контекст) живёт дольше рендера
+    WindowSystem::Window m_window;                         // окно (и GL-контекст) живёт дольше рендера
     std::optional<RendererSystem::Renderer2D> m_renderer;
     EventSystem::EventBus m_bus;
     RendererSystem::Camera2D m_camera;
@@ -134,9 +137,6 @@ private:
     EventSystem::EventWriter<MouseButtonEvent> m_mouse_out;
 
     FixedStep m_step;
-    float m_pending_scroll = 0.0f;
-
-    static App* s_active; // для C-колбэка колеса мыши (WindowSystem его не пробрасывает)
 };
 
 } // namespace Core

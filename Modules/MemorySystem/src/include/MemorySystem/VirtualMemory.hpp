@@ -40,7 +40,9 @@ public:
 
     VirtualRegion(const VirtualRegion&) = delete;
     VirtualRegion& operator=(const VirtualRegion&) = delete;
+    /// @brief Перемещение: резерв переходит к новому объекту, старый становится пустым.
     VirtualRegion(VirtualRegion&& other) noexcept;
+    /// @copydoc VirtualRegion(VirtualRegion&&)
     VirtualRegion& operator=(VirtualRegion&& other) noexcept;
     ~VirtualRegion();
 

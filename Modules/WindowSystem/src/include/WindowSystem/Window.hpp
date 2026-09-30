@@ -1,52 +1,176 @@
 #pragma once
+/**
+ * @file Window.hpp
+ * @brief Окно с OpenGL-контекстом поверх GLFW: создание, кадр, свойства, ввод, события.
+ *
+ * @code
+ * auto created = WindowSystem::Window::create({.title = "Game", .width = 1280, .height = 720});
+ * if (!created) { std::println(stderr, "{}", created.error()); return 1; }
+ * WindowSystem::Window& window = *created;
+ *
+ * window.events().key.subscribe([&](int key, int action) {
+ *     if (key == GLFW_KEY_ESCAPE && action == WindowSystem::action_press) window.request_close();
+ * });
+ *
+ * while (!window.should_close()) {
+ *     window.poll_events();                          // обновляет input() и рассылает события
+ *     if (window.input().pressed(GLFW_KEY_SPACE)) jump();
+ *     const WindowSystem::Size fb = window.framebuffer_size();
+ *     render(fb.width, fb.height);
+ *     window.swap_buffers();
+ * }
+ * @endcode
+ *
+ * Заголовок подключает glad и GLFW: игре нужны коды клавиш `GLFW_KEY_*` и функции OpenGL.
+ *
+ * **ZII.** Созданное по умолчанию окно пусто: все запросы безопасны (размеры 0, `should_close() == true`).
+ * Окно можно перемещать: состояние лежит в куче, и обработчики GLFW всегда видят актуальный объект.
+ */
 
-#include <glad/glad.h>
+#include <WindowSystem/Input.hpp>
+#include <WindowSystem/Listeners.hpp>
+
+// clang-format off
+#include <glad/glad.h>   // glad — строго до GLFW
 #include <GLFW/glfw3.h>
+// clang-format on
 
-#include <functional>
+#include <cstdint>
+#include <expected>
+#include <memory>
 #include <string>
+#include <string_view>
 
+namespace WindowSystem {
+
+/// @brief Размер в пикселях.
+struct Size {
+    int width = 0;  ///< Ширина.
+    int height = 0; ///< Высота.
+    /// @brief Совпадают обе стороны.
+    friend bool operator==(Size, Size) noexcept = default;
+};
+
+/// @brief Параметры создания окна.
+struct WindowConfig {
+    std::string title = "FluxEng"; ///< Заголовок.
+    int width = 1280;              ///< Ширина окна (в экранных координатах).
+    int height = 720;              ///< Высота окна.
+    bool visible = true;           ///< false — скрытое окно (тесты, рендер в текстуру).
+    bool resizable = true;         ///< Можно ли менять размер мышью.
+    bool vsync = true;             ///< Синхронизация с частотой монитора.
+    int gl_major = 3;              ///< Версия OpenGL (Core Profile): старшая.
+    int gl_minor = 3;              ///< Версия OpenGL: младшая.
+    int samples = 0;               ///< MSAA; 0 — выключено.
+    bool close_on_escape = false;  ///< Закрывать окно по Esc (удобно для примеров; в игре решает она сама).
+};
+
+/// @brief События окна. На каждое можно подписать сколько угодно обработчиков.
+struct WindowEvents {
+    Listeners<int, int> key;                  ///< (GLFW_KEY_*, action)
+    Listeners<int, int> mouse_button;         ///< (GLFW_MOUSE_BUTTON_*, action)
+    Listeners<double, double> cursor;         ///< (x, y) в пикселях окна
+    Listeners<double, double> scroll;         ///< (dx, dy)
+    Listeners<std::uint32_t> character;       ///< Unicode-символ
+    Listeners<int, int> framebuffer_resized;  ///< (ширина, высота) framebuffer'а
+    Listeners<bool> focus;                    ///< true — получили фокус
+};
+
+/// @brief Окно с OpenGL-контекстом.
 class Window {
 public:
-    // Конструктор принимает флаг видимости (true для игры, false для тестов)
-    Window(int width, int height, const std::string& title, bool visible = true);
-    ~Window();
+    /// @brief Пустое окно (ZII): ничего не открыто, запросы безопасны.
+    Window() noexcept;
 
-    // Запрещаем копирование
+    /**
+     * @brief Создаёт окно, делает его контекст текущим и загружает OpenGL (glad).
+     * @return Окно или текст ошибки (GLFW не инициализировался, нет нужной версии OpenGL, нет дисплея).
+     */
+    [[nodiscard]] static std::expected<Window, std::string> create(const WindowConfig& config = {});
+
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;
-
-    // Разрешаем перемещение
+    /// @brief Перемещение: окно и подписки переходят к новому объекту, старый становится пустым.
     Window(Window&& other) noexcept;
+    /// @brief Перемещение; прежнее окно этого объекта закрывается.
     Window& operator=(Window&& other) noexcept;
+    ~Window();
 
-    bool shouldClose() const;
-    void update();
+    // ------------------------------------------------------------------ кадр
 
-    // Геттеры
-    GLFWwindow* getNativeWindow() const { return m_window; }
-    int getWidth() const { return m_width; }
-    int getHeight() const { return m_height; }
+    /**
+     * @brief Начинает кадр ввода и обрабатывает события ОС.
+     *
+     * Сначала InputState::begin_frame(), затем `glfwPollEvents()`: обработчики событий
+     * вызываются внутри, input() после возврата описывает этот кадр.
+     */
+    void poll_events();
 
-    // Пользовательские callbacks
-    std::function<void(int key, int action)> onKeyPress;
-    std::function<void(int width, int height)> onResize;
+    /// @brief Показывает нарисованный кадр.
+    void swap_buffers();
+
+    /// @brief Пользователь или программа попросили закрыть окно.
+    [[nodiscard]] bool should_close() const noexcept;
+    /// @brief Просит закрыть окно (should_close() станет true).
+    void request_close() noexcept;
+
+    // ------------------------------------------------------------------ свойства
+
+    /// @brief Меняет заголовок.
+    void set_title(std::string_view title);
+    /// @brief Текущий заголовок.
+    [[nodiscard]] const std::string& title() const noexcept;
+
+    /// @brief Размер окна в экранных координатах (в них приходит курсор).
+    [[nodiscard]] Size window_size() const noexcept;
+    /// @brief Размер framebuffer'а в пикселях (для glViewport; на HiDPI больше window_size()).
+    [[nodiscard]] Size framebuffer_size() const noexcept;
+    /// @brief Масштаб контента (1.0 — обычный монитор, 2.0 — Retina/200%).
+    [[nodiscard]] float content_scale() const noexcept;
+
+    /// @brief Включает/выключает vsync (для контекста этого окна).
+    void set_vsync(bool enabled) noexcept;
+    /// @brief Включён ли vsync.
+    [[nodiscard]] bool vsync() const noexcept;
+
+    /// @brief Секунды с инициализации GLFW (монотонные часы, высокая точность).
+    [[nodiscard]] static double time() noexcept;
+
+    // ------------------------------------------------------------------ ввод и события
+
+    /// @brief Состояние ввода за текущий кадр.
+    [[nodiscard]] const InputState& input() const noexcept;
+    /// @brief Курсор в пикселях framebuffer'а (с учётом HiDPI) — удобно для камеры.
+    [[nodiscard]] Vec2d cursor_in_framebuffer() const noexcept;
+
+    /// @brief Подписки на события окна.
+    [[nodiscard]] WindowEvents& events() noexcept;
+
+    /**
+     * @name Внедрение событий
+     * Идут тем же путём, что события ОС: обновляют input() и рассылают подписчикам.
+     * Нужны для тестов и воспроизведения записанного ввода (replay).
+     * @{
+     */
+    void inject_key(int key, int action);          ///< Клавиша.
+    void inject_mouse_button(int button, int action); ///< Кнопка мыши.
+    void inject_cursor(double x, double y);        ///< Курсор.
+    void inject_scroll(double dx, double dy);      ///< Колесо.
+    void inject_char(std::uint32_t codepoint);     ///< Символ.
+    /** @} */
+
+    /// @brief GLFW-окно для того, чего здесь ещё нет (или `nullptr`).
+    [[nodiscard]] GLFWwindow* native_handle() const noexcept;
+    /// @brief `true`, если окно создано.
+    [[nodiscard]] explicit operator bool() const noexcept { return native_handle() != nullptr; }
+
+    /// @brief Сколько окон открыто сейчас (GLFW живёт, пока их больше нуля).
+    [[nodiscard]] static int open_windows() noexcept;
+
+    struct Impl; ///< Состояние окна в куче: адрес стабилен при перемещении Window.
 
 private:
-    GLFWwindow* m_window = nullptr;
-    int m_width;
-    int m_height;
-    std::string m_title;
-
-    // Подсчет активных окон для управления glfwInit/glfwTerminate
-    static inline size_t s_windowCount = 0;
-
-    // Системная инициализация окружения (GTK suppress + GLFW init)
-    static bool initSystem();
-    static void terminateSystem();
-    static void setEnvVar(const char* name, const char* value);
-
-    // Статические C-callbacks для GLFW
-    static void frameBufferResizeCallback(GLFWwindow* window, int width, int height);
-    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
+    std::unique_ptr<Impl> m_impl;
 };
+
+} // namespace WindowSystem

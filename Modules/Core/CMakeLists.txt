@@ -29,10 +29,6 @@ target_include_directories(Core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>
     $<INSTALL_INTERFACE:include>
 )
-# Заголовок WindowSystem пока не чист под -Wshadow/-Wpedantic — подключаем как системный.
-target_include_directories(Core SYSTEM PUBLIC
-    $<TARGET_PROPERTY:engine::WindowSystem,INTERFACE_INCLUDE_DIRECTORIES>
-)
 
 target_compile_features(Core PUBLIC cxx_std_23)
 target_link_libraries(Core

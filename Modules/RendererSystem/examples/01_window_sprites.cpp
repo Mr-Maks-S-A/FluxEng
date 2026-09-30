@@ -53,11 +53,13 @@ int frames_limit(int argc, char** argv) {
 int main(int argc, char** argv) {
     const int max_frames = frames_limit(argc, argv);
 
-    Window window(1280, 720, "FluxEng RendererSystem — sprites", true);
-    if (window.getNativeWindow() == nullptr) {
-        std::println(stderr, "cannot create window");
+    auto opened = WindowSystem::Window::create(
+        {.title = "FluxEng RendererSystem — sprites", .width = 1280, .height = 720, .close_on_escape = true});
+    if (!opened) {
+        std::println(stderr, "cannot create window: {}", opened.error());
         return 1;
     }
+    WindowSystem::Window& window = *opened;
 
     auto created = Renderer2D::create();
     if (!created) {
@@ -88,11 +90,12 @@ int main(int argc, char** argv) {
     }
 
     Camera2D camera{.position = {0.0f, 0.0f}, .zoom = 1.0f};
-    double last_time = glfwGetTime();
+    double last_time = WindowSystem::Window::time();
     double stats_timer = 0.0;
 
-    for (int frame = 0; !window.shouldClose() && frame != max_frames; ++frame) {
-        const double now = glfwGetTime();
+    for (int frame = 0; !window.should_close() && frame != max_frames; ++frame) {
+        window.poll_events();
+        const double now = WindowSystem::Window::time();
         const auto dt = static_cast<float>(now - last_time);
         last_time = now;
 
@@ -106,9 +109,7 @@ int main(int argc, char** argv) {
         camera.zoom = 1.5f + 0.5f * static_cast<float>(std::sin(now * 0.3));
         camera.position = {static_cast<float>(std::cos(now * 0.2)) * 100.0f, 0.0f};
 
-        int width = 0;
-        int height = 0;
-        glfwGetFramebufferSize(window.getNativeWindow(), &width, &height);
+        const auto [width, height] = window.framebuffer_size();
         camera.viewport = {static_cast<float>(width), static_cast<float>(height)};
 
         // --- отрисовка
@@ -135,7 +136,7 @@ int main(int argc, char** argv) {
         renderer.draw_line(creatures[0].position, creatures[1].position, 2.0f, Colors::red.with_alpha(160), 10);
 
         const RenderStats stats = renderer.end();
-        window.update();
+        window.swap_buffers();
 
         stats_timer += dt;
         if (stats_timer >= 1.0) {

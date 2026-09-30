@@ -58,10 +58,13 @@ template<typename T>
 /// @brief Мир ECS: реестр сущностей + пулы компонентов.
 class World {
 public:
+    /// @brief Пустой мир.
     World() = default;
     World(const World&) = delete;
     World& operator=(const World&) = delete;
+    /// @brief Перемещение: сущности и компоненты переходят целиком.
     World(World&&) noexcept = default;
+    /// @copydoc World(World&&)
     World& operator=(World&&) noexcept = default;
     ~World() = default;
 

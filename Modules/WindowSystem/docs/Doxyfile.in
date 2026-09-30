@@ -1,9 +1,9 @@
-# Doxyfile для модуля ECSSystem.
-# Генерируется CMake (configure_file) в каталог сборки; запуск: cmake --build . --target ECSSystemDocs
+# Doxyfile для модуля WindowSystem.
+# Генерируется CMake (configure_file) в каталог сборки; запуск: cmake --build . --target WindowSystemDocs
 
-PROJECT_NAME           = "FluxEng ECSSystem"
+PROJECT_NAME           = "FluxEng WindowSystem"
 PROJECT_NUMBER         = @PROJECT_VERSION@
-PROJECT_BRIEF          = "ECS движка FluxEng: сущности с поколением, sparse set, выборки"
+PROJECT_BRIEF          = "Окно, OpenGL-контекст, ввод и события движка FluxEng"
 OUTPUT_DIRECTORY       = @MODULE_DOCS_OUTPUT@
 OUTPUT_LANGUAGE        = Russian
 CREATE_SUBDIRS         = NO

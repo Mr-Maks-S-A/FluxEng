@@ -8,9 +8,9 @@ OUTPUT_DIRECTORY       = @MODULE_DOCS_OUTPUT@
 OUTPUT_LANGUAGE        = Russian
 CREATE_SUBDIRS         = NO
 
-INPUT                  = @CMAKE_CURRENT_SOURCE_DIR@/docs/mainpage.md \
+INPUT                  = @CMAKE_CURRENT_SOURCE_DIR@/docs \
                          @CMAKE_CURRENT_SOURCE_DIR@/src/include
-FILE_PATTERNS          = *.hpp *.md
+FILE_PATTERNS          = *.hpp *.md *.dox
 RECURSIVE              = YES
 USE_MDFILE_AS_MAINPAGE = @CMAKE_CURRENT_SOURCE_DIR@/docs/mainpage.md
 STRIP_FROM_PATH        = @CMAKE_CURRENT_SOURCE_DIR@/src/include

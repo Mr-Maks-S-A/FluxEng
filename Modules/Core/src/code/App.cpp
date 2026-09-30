@@ -25,8 +25,6 @@ namespace Core {
 using namespace RendererSystem;
 namespace es = EventSystem;
 
-App* App::s_active = nullptr;
-
 AppConfig parse_args(AppConfig config, int argc, char** argv) {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string_view(argv[i]) == "--frames") {
@@ -40,13 +38,21 @@ AppConfig parse_args(AppConfig config, int argc, char** argv) {
     return config;
 }
 
-App::App(AppConfig config)
-    : m_config(std::move(config)), m_window(m_config.width, m_config.height, m_config.title, true) {
+namespace {
+
+WindowSystem::Window open_window(const AppConfig& config) {
+    auto window = WindowSystem::Window::create({.title = config.title, .width = config.width, .height = config.height});
+    if (!window) {
+        throw std::runtime_error(window.error());
+    }
+    return std::move(*window);
+}
+
+} // namespace
+
+App::App(AppConfig config) : m_config(std::move(config)), m_window(open_window(m_config)) {
     m_step.ticks_per_second = m_config.ticks_per_second;
     m_step.lockstep = m_config.max_ticks >= 0;
-    if (m_window.getNativeWindow() == nullptr) {
-        throw std::runtime_error("cannot create window / OpenGL context");
-    }
     auto renderer = Renderer2D::create();
     if (!renderer) {
         throw std::runtime_error(renderer.error());
@@ -60,14 +66,7 @@ App::App(AppConfig config)
     m_key_out = m_bus.writer<KeyEvent>(m_platform);
     m_mouse_out = m_bus.writer<MouseButtonEvent>(m_platform);
 
-    m_window.onKeyPress = [this](int key, int action) { on_key(key, action); };
-
-    s_active = this;
-    glfwSetScrollCallback(m_window.getNativeWindow(), [](GLFWwindow*, double, double y) {
-        if (s_active != nullptr) {
-            s_active->m_pending_scroll += static_cast<float>(y);
-        }
-    });
+    m_window.events().key.subscribe([this](int key, int action) { on_key(key, action); });
 }
 
 void App::on_key(int key, int action) {
@@ -82,49 +81,48 @@ void App::on_key(int key, int action) {
         case GLFW_KEY_MINUS:
         case GLFW_KEY_KP_SUBTRACT: m_step.speed = std::max(m_step.speed / 2, 1); break;
         case GLFW_KEY_F1: print_event_report(); break;
+        case GLFW_KEY_ESCAPE: m_window.request_close(); break;
         default: break;
     }
 }
 
 void App::poll_input(float frame_seconds) {
-    GLFWwindow* native = m_window.getNativeWindow();
+    const WindowSystem::InputState& input = m_window.input();
 
     // Панорама камерой — в домене кадра, работает и на паузе.
     glm::vec2 pan{0.0f};
-    if (glfwGetKey(native, GLFW_KEY_A) == GLFW_PRESS || glfwGetKey(native, GLFW_KEY_LEFT) == GLFW_PRESS) pan.x -= 1;
-    if (glfwGetKey(native, GLFW_KEY_D) == GLFW_PRESS || glfwGetKey(native, GLFW_KEY_RIGHT) == GLFW_PRESS) pan.x += 1;
-    if (glfwGetKey(native, GLFW_KEY_W) == GLFW_PRESS || glfwGetKey(native, GLFW_KEY_UP) == GLFW_PRESS) pan.y -= 1;
-    if (glfwGetKey(native, GLFW_KEY_S) == GLFW_PRESS || glfwGetKey(native, GLFW_KEY_DOWN) == GLFW_PRESS) pan.y += 1;
+    if (input.down(GLFW_KEY_A) || input.down(GLFW_KEY_LEFT)) pan.x -= 1;
+    if (input.down(GLFW_KEY_D) || input.down(GLFW_KEY_RIGHT)) pan.x += 1;
+    if (input.down(GLFW_KEY_W) || input.down(GLFW_KEY_UP)) pan.y -= 1;
+    if (input.down(GLFW_KEY_S) || input.down(GLFW_KEY_DOWN)) pan.y += 1;
     m_camera.position += pan * (500.0f * frame_seconds / m_camera.zoom);
 
-    double mx = 0.0;
-    double my = 0.0;
-    glfwGetCursorPos(native, &mx, &my);
-    int window_w = 0;
-    int window_h = 0;
-    glfwGetWindowSize(native, &window_w, &window_h);
-    // Курсор приходит в координатах окна, камера — в пикселях framebuffer'а (HiDPI).
-    const glm::vec2 scale = window_w > 0 ? m_camera.viewport / glm::vec2(window_w, window_h) : glm::vec2(1.0f);
-    m_input.mouse_screen = glm::vec2(mx, my) * scale;
+    // Курсор приходит в координатах окна, камера — в пикселях framebuffer'а (HiDPI): пересчёт в WindowSystem.
+    const WindowSystem::Vec2d cursor = m_window.cursor_in_framebuffer();
+    m_input.mouse_screen = {static_cast<float>(cursor.x), static_cast<float>(cursor.y)};
 
     // Зум к курсору: точка мира под курсором остаётся на месте.
-    if (m_pending_scroll != 0.0f) {
+    if (const auto scroll = static_cast<float>(input.scroll().y); scroll != 0.0f) {
         const glm::vec2 before = m_camera.screen_to_world(m_input.mouse_screen);
-        m_camera.zoom = std::clamp(m_camera.zoom * std::pow(1.15f, m_pending_scroll), 0.1f, 20.0f);
+        m_camera.zoom = std::clamp(m_camera.zoom * std::pow(1.15f, scroll), 0.1f, 20.0f);
         m_camera.position += before - m_camera.screen_to_world(m_input.mouse_screen);
-        m_pending_scroll = 0.0f;
     }
     m_input.mouse_world = m_camera.screen_to_world(m_input.mouse_screen);
 
     constexpr int buttons[3] = {GLFW_MOUSE_BUTTON_LEFT, GLFW_MOUSE_BUTTON_RIGHT, GLFW_MOUSE_BUTTON_MIDDLE};
     for (std::size_t i = 0; i < 3; ++i) {
-        const bool down = glfwGetMouseButton(native, buttons[i]) == GLFW_PRESS;
-        m_input.pressed[i] = down && !m_input.down[i];
-        if (down != m_input.down[i]) {
-            m_mouse_out.emit(MouseButtonEvent{.button = buttons[i], .action = down ? GLFW_PRESS : GLFW_RELEASE,
+        const int button = buttons[i];
+        m_input.down[i] = input.mouse_down(button);
+        m_input.pressed[i] = input.mouse_pressed(button);
+        // Нажатие и отпускание внутри одного кадра дают оба события, по порядку.
+        if (input.mouse_pressed(button)) {
+            m_mouse_out.emit(MouseButtonEvent{.button = button, .action = GLFW_PRESS,
                                               .world_x = m_input.mouse_world.x, .world_y = m_input.mouse_world.y});
         }
-        m_input.down[i] = down;
+        if (input.mouse_released(button)) {
+            m_mouse_out.emit(MouseButtonEvent{.button = button, .action = GLFW_RELEASE,
+                                              .world_x = m_input.mouse_world.x, .world_y = m_input.mouse_world.y});
+        }
     }
 }
 
@@ -140,24 +138,27 @@ int App::run(Game& game) {
     std::ofstream(dot_name) << graph.to_dot();
     std::println("graph written to {} (dot -Tsvg {} -o graph.svg)\n", dot_name, dot_name);
 
-    int fb_w = 0;
-    int fb_h = 0;
-    glfwGetFramebufferSize(m_window.getNativeWindow(), &fb_w, &fb_h);
+    WindowSystem::Size fb = m_window.framebuffer_size();
+    int fb_w = fb.width;
+    int fb_h = fb.height;
     m_camera.viewport = {static_cast<float>(fb_w), static_cast<float>(fb_h)};
     const glm::vec2 world = game.world_size();
     m_camera.position = world * 0.5f;
     m_camera.zoom = std::min(m_camera.viewport.x / world.x, m_camera.viewport.y / world.y) * 0.95f;
 
-    double last = glfwGetTime();
+    double last = WindowSystem::Window::time();
     double title_timer = 0.0;
     int title_frames = 0;
 
-    for (int frame = 0; !m_window.shouldClose(); ++frame) {
-        const double now = glfwGetTime();
+    for (int frame = 0; !m_window.should_close(); ++frame) {
+        m_window.poll_events(); // ввод этого кадра: InputState + подписчики (клавиши → шина)
+        const double now = WindowSystem::Window::time();
         const double frame_dt = std::min(now - last, 0.25);
         last = now;
 
-        glfwGetFramebufferSize(m_window.getNativeWindow(), &fb_w, &fb_h);
+        fb = m_window.framebuffer_size();
+        fb_w = fb.width;
+        fb_h = fb.height;
         m_camera.viewport = {static_cast<float>(std::max(fb_w, 1)), static_cast<float>(std::max(fb_h, 1))};
         poll_input(static_cast<float>(frame_dt));
 
@@ -186,7 +187,7 @@ int App::run(Game& game) {
         if (!m_config.screenshot.empty() && last_frame) {
             save_screenshot(fb_w, fb_h);
         }
-        m_window.update();
+        m_window.swap_buffers();
 
         title_timer += frame_dt;
         ++title_frames;
@@ -202,7 +203,6 @@ int App::run(Game& game) {
 
     std::println("\n===== {} : finished at tick {} =====", m_config.title, m_bus.current_tick());
     print_event_report();
-    s_active = nullptr;
     return 0;
 }
 
@@ -252,12 +252,11 @@ void App::save_screenshot(int width, int height) const {
 }
 
 void App::update_title(Game& game, double fps) {
-    // В WindowSystem нет set_title() — обращаемся к GLFW напрямую.
     const std::string title =
         std::format("{} | tick {} | {} | {:.0f} fps | {} draw calls | {}", m_config.title, m_bus.current_tick(),
                     m_step.paused ? "PAUSED" : std::format("x{}", m_step.speed), fps, m_renderer->last_stats().draw_calls,
                     game.status());
-    glfwSetWindowTitle(m_window.getNativeWindow(), title.c_str());
+    m_window.set_title(title);
 }
 
 void App::print_event_report() const {

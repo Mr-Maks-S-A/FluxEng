@@ -31,9 +31,9 @@ int main(int argc, char** argv) {
     const std::string output = argc > 1 ? argv[1] : "renderer_offscreen.png";
 
     // Окно нужно только ради OpenGL-контекста, поэтому оно скрыто.
-    Window window(16, 16, "offscreen", false);
-    if (window.getNativeWindow() == nullptr) {
-        std::println(stderr, "cannot create an OpenGL context");
+    auto window = WindowSystem::Window::create({.title = "offscreen", .width = 16, .height = 16, .visible = false});
+    if (!window) {
+        std::println(stderr, "cannot create an OpenGL context: {}", window.error());
         return 1;
     }
 

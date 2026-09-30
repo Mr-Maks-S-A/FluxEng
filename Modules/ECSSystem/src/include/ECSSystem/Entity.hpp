@@ -42,7 +42,9 @@ struct Entity {
     /// @brief `true`, если ссылка не нулевая (жива ли сущность — спрашивайте World::valid()).
     [[nodiscard]] constexpr explicit operator bool() const noexcept { return index != 0; }
 
+    /// @brief Равны, если совпадают и слот, и поколение.
     friend constexpr bool operator==(Entity, Entity) noexcept = default;
+    /// @brief Порядок по слоту, затем по поколению (для std::map / std::set).
     friend constexpr auto operator<=>(Entity, Entity) noexcept = default;
 };
 
@@ -134,6 +136,7 @@ private:
 /// @brief Хеш для `std::unordered_map<ECS::Entity, …>`.
 template<>
 struct std::hash<ECS::Entity> {
+    /// @brief Хеш от слота и поколения.
     std::size_t operator()(ECS::Entity e) const noexcept {
         return std::hash<std::uint64_t>{}((std::uint64_t{e.generation} << 32) | e.index);
     }

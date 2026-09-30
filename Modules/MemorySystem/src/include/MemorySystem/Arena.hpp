@@ -82,7 +82,9 @@ public:
 
     Arena(const Arena&) = delete;
     Arena& operator=(const Arena&) = delete;
+    /// @brief Перемещение: память и адреса переходят к новой арене, старая становится пустой.
     Arena(Arena&& other) noexcept;
+    /// @copydoc Arena(Arena&&)
     Arena& operator=(Arena&& other) noexcept;
     ~Arena() = default;
 
