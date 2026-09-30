@@ -1,22 +1,30 @@
 /**
  * @file main.cpp
- * @brief Colony — упрощённый RimWorld: колонисты рубят деревья, добывают камень и носят всё на склад.
+ * @brief Colony — упрощённый RimWorld на ECS: колонисты рубят деревья, добывают камень и носят всё на склад.
  *
- * Модули общаются только событиями; общие данные (позиции, ресурсы) читаются напрямую —
- * в движке это будут компоненты ECS. Порядок модулей в тике не важен для корректности:
- * всё, что отправлено в тике N, видно в N+1.
+ * Что показывает:
+ * - колонисты и ресурсы — сущности ECS; ссылка «колонист → ресурс» — ECS::Entity с поколением.
+ *   Исчерпанный ресурс уничтожается, и все, кто на него ссылался, узнают это через `world.valid()`:
+ *   не нужно ни «никогда не переиспользовать индексы», ни рассылать отмену брони;
+ * - владельцы данных: World создаёт и уничтожает ресурсы, Colonists — колонистов, Jobs владеет
+ *   компонентами брони (Reserved, AwaitingJob). Чужое читается через выборки `const`;
+ * - карта уровня в арене MemorySystem: тайлы и «кто стоит на тайле» (ECS::Entity{} = свободно, ZII);
+ * - порядок модулей в тике не важен для корректности: всё, что отправлено в тике N, видно в N+1.
  *
- *   Orders ──order_place──▶ World ──resource_spawned──▶ Chronicle
- *                            │  ▲
- *              resource_depleted  resource_harvested
- *                            ▼  │
+ *   Orders ──order_place──▶ World ──resource_spawned / resource_depleted──▶ Chronicle
+ *                            ▲
+ *                 resource_harvested
+ *                            │
  *   Jobs ──job_assigned──▶ Colonists ──item_delivered──▶ Economy ──milestone──▶ Chronicle
+ *     ▲                        │
+ *     └──resource_harvested────┘  (снять бронь, чтобы ресурс мог взять другой)
  *
  * Управление: ЛКМ — посадить дерево, ПКМ — положить камень, J — линии заданий.
  * Общие клавиши — см. Core::App.
  */
 
 #include <Core/Core.hpp>
+#include <ECSSystem/ECSSystem.hpp>
 
 #include <algorithm>
 #include <array>
@@ -26,6 +34,7 @@
 #include <limits>
 #include <print>
 #include <random>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -33,91 +42,6 @@ namespace es = EventSystem;
 using namespace RendererSystem;
 
 namespace {
-
-// =============================================================================
-// Контракт событий
-// =============================================================================
-
-enum class ResourceKind : std::uint32_t { Tree = 0, Rock = 1 };
-
-struct PlaceOrderEvent {
-    std::int32_t tile_x = 0;
-    std::int32_t tile_y = 0;
-    std::uint32_t kind = 0;
-
-    static constexpr std::string_view event_name = "colony.order_place";
-    using fields = es::Fields<es::Field<"tile_x", &PlaceOrderEvent::tile_x>, es::Field<"tile_y", &PlaceOrderEvent::tile_y>,
-                              es::Field<"kind", &PlaceOrderEvent::kind>>;
-};
-
-struct ResourceSpawnedEvent {
-    std::uint32_t resource = 0;
-    std::int32_t tile_x = 0;
-    std::int32_t tile_y = 0;
-    std::uint32_t kind = 0;
-    std::uint32_t regrown = 0; ///< 1 — выросло само, 0 — по приказу игрока.
-
-    static constexpr std::string_view event_name = "colony.resource_spawned";
-    using fields = es::Fields<es::Field<"resource", &ResourceSpawnedEvent::resource>,
-                              es::Field<"tile_x", &ResourceSpawnedEvent::tile_x>,
-                              es::Field<"tile_y", &ResourceSpawnedEvent::tile_y>,
-                              es::Field<"kind", &ResourceSpawnedEvent::kind>,
-                              es::Field<"regrown", &ResourceSpawnedEvent::regrown>>;
-};
-
-struct JobAssignedEvent {
-    std::uint32_t colonist = 0;
-    std::uint32_t resource = 0;
-
-    static constexpr std::string_view event_name = "colony.job_assigned";
-    using fields = es::Fields<es::Field<"colonist", &JobAssignedEvent::colonist>,
-                              es::Field<"resource", &JobAssignedEvent::resource>>;
-};
-
-struct ResourceHarvestedEvent {
-    std::uint32_t colonist = 0;
-    std::uint32_t resource = 0;
-    std::uint32_t kind = 0;
-    std::uint32_t amount = 0;
-
-    static constexpr std::string_view event_name = "colony.resource_harvested";
-    using fields = es::Fields<es::Field<"colonist", &ResourceHarvestedEvent::colonist>,
-                              es::Field<"resource", &ResourceHarvestedEvent::resource>,
-                              es::Field<"kind", &ResourceHarvestedEvent::kind>,
-                              es::Field<"amount", &ResourceHarvestedEvent::amount>>;
-};
-
-struct ResourceDepletedEvent {
-    std::uint32_t resource = 0;
-    std::int32_t tile_x = 0;
-    std::int32_t tile_y = 0;
-    std::uint32_t kind = 0;
-
-    static constexpr std::string_view event_name = "colony.resource_depleted";
-    using fields = es::Fields<es::Field<"resource", &ResourceDepletedEvent::resource>,
-                              es::Field<"tile_x", &ResourceDepletedEvent::tile_x>,
-                              es::Field<"tile_y", &ResourceDepletedEvent::tile_y>,
-                              es::Field<"kind", &ResourceDepletedEvent::kind>>;
-};
-
-struct ItemDeliveredEvent {
-    std::uint32_t colonist = 0;
-    std::uint32_t kind = 0;
-    std::uint32_t amount = 0;
-
-    static constexpr std::string_view event_name = "colony.item_delivered";
-    using fields = es::Fields<es::Field<"colonist", &ItemDeliveredEvent::colonist>,
-                              es::Field<"kind", &ItemDeliveredEvent::kind>,
-                              es::Field<"amount", &ItemDeliveredEvent::amount>>;
-};
-
-struct MilestoneEvent {
-    std::uint32_t kind = 0;
-    std::uint32_t total = 0;
-
-    static constexpr std::string_view event_name = "colony.milestone";
-    using fields = es::Fields<es::Field<"kind", &MilestoneEvent::kind>, es::Field<"total", &MilestoneEvent::total>>;
-};
 
 // =============================================================================
 // Мир
@@ -130,7 +54,11 @@ constexpr Rect stockpile_tiles{{3.0f, 3.0f}, {6.0f, 4.0f}}; // в тайлах
 constexpr int colonist_count = 10;
 constexpr float colonist_speed = 48.0f; // пикселей в игровую секунду
 
-/// Атлас 8×2 клеток по 16 px: всё рисуется одной-двумя текстурами.
+enum class ResourceKind : std::uint32_t { Tree = 0, Rock = 1 };
+
+std::string_view kind_name(ResourceKind kind) { return kind == ResourceKind::Tree ? "logs" : "stones"; }
+
+/// Атлас 8×2 клеток по 16 px: всё рисуется одной текстурой.
 enum AtlasCell : int {
     Grass = 0, Dirt = 1, StockpileFloor = 2, TreeSprite = 3, RockSprite = 4, LogItem = 5, StoneItem = 6,
     WalkFirst = 8, WorkFirst = 12, Idle = 14,
@@ -171,8 +99,7 @@ Image make_atlas() {
 }
 
 UvRect atlas_uv(int index) {
-    // make_grid_frames возвращает vector — в цикле отрисовки это аллокация на каждый спрайт,
-    // поэтому UV клеток считаются один раз (в RendererSystem не хватает SpriteSheetGrid::cell_uv()).
+    // make_grid_frames возвращает vector, поэтому UV клеток считаются один раз.
     static const std::vector<AnimationFrame> cells = make_grid_frames({.columns = 8, .rows = 2}, 0, 16, 1.0f);
     return cells[static_cast<std::size_t>(index)].uv;
 }
@@ -185,11 +112,504 @@ bool in_stockpile(glm::ivec2 t) {
     return stockpile_tiles.contains({static_cast<float>(t.x) + 0.5f, static_cast<float>(t.y) + 0.5f});
 }
 
+bool on_map(glm::ivec2 t) { return t.x >= 0 && t.y >= 0 && t.x < map_w && t.y < map_h; }
+
 std::string game_time(es::Tick tick) {
     // Один тик — одна игровая минута.
     return std::format("day {}, {:02}:{:02}", tick / 1440 + 1, (tick / 60) % 24, tick % 60);
 }
 
+ECS::Entity entity(std::uint32_t index, std::uint32_t generation) { return {index, generation}; }
+
+// =============================================================================
+// Компоненты. Нулевое значение каждого — осмысленное (ZII).
+// =============================================================================
+
+/// Ресурс на карте (дерево или камень).
+struct Resource {
+    ResourceKind kind = ResourceKind::Tree;
+    int amount = 0;     ///< Сколько раз ещё можно добыть.
+    int max_amount = 0;
+};
+struct Tile {
+    glm::ivec2 at{0};
+};
+
+/// Колонист: конечный автомат.
+enum class State : std::uint8_t { Idle, ToResource, Working, ToStockpile };
+struct Worker {
+    State state = State::Idle;
+    ECS::Entity target;     ///< Ресурс, над которым работает; Entity{} — нет цели.
+    int work_timer = 0;
+    bool facing_left = false;
+};
+struct Position {
+    glm::vec2 now{0.0f};
+    glm::vec2 goal{0.0f};
+};
+struct Carrying {             ///< Есть только у тех, кто несёт груз на склад.
+    ResourceKind kind = ResourceKind::Tree;
+};
+struct Anim {
+    AnimationState state{};
+};
+
+/// Компоненты модуля Jobs: бронь ресурса и «задание отправлено, ждём, пока Colonists его примет».
+struct Reserved {
+    ECS::Entity by;
+};
+struct AwaitingJob {
+    es::Tick since = 0;
+};
+
+// =============================================================================
+// События. Сущности передаются двумя полями: события — плоские структуры.
+// =============================================================================
+
+struct PlaceOrderEvent {
+    std::int32_t tile_x = 0;
+    std::int32_t tile_y = 0;
+    std::uint32_t kind = 0;
+
+    static constexpr std::string_view event_name = "colony.order_place";
+    using fields = es::Fields<es::Field<"tile_x", &PlaceOrderEvent::tile_x>, es::Field<"tile_y", &PlaceOrderEvent::tile_y>,
+                              es::Field<"kind", &PlaceOrderEvent::kind>>;
+};
+
+struct ResourceSpawnedEvent {
+    std::uint32_t resource_index = 0;
+    std::uint32_t resource_generation = 0;
+    std::int32_t tile_x = 0;
+    std::int32_t tile_y = 0;
+    std::uint32_t kind = 0;
+    std::uint32_t regrown = 0; ///< 1 — выросло само, 0 — по приказу игрока.
+
+    static constexpr std::string_view event_name = "colony.resource_spawned";
+    using fields = es::Fields<es::Field<"resource_index", &ResourceSpawnedEvent::resource_index>,
+                              es::Field<"resource_generation", &ResourceSpawnedEvent::resource_generation>,
+                              es::Field<"tile_x", &ResourceSpawnedEvent::tile_x>,
+                              es::Field<"tile_y", &ResourceSpawnedEvent::tile_y>,
+                              es::Field<"kind", &ResourceSpawnedEvent::kind>,
+                              es::Field<"regrown", &ResourceSpawnedEvent::regrown>>;
+};
+
+struct JobAssignedEvent {
+    std::uint32_t colonist_index = 0;
+    std::uint32_t colonist_generation = 0;
+    std::uint32_t resource_index = 0;
+    std::uint32_t resource_generation = 0;
+
+    [[nodiscard]] ECS::Entity colonist() const { return entity(colonist_index, colonist_generation); }
+    [[nodiscard]] ECS::Entity resource() const { return entity(resource_index, resource_generation); }
+
+    static constexpr std::string_view event_name = "colony.job_assigned";
+    using fields = es::Fields<es::Field<"colonist_index", &JobAssignedEvent::colonist_index>,
+                              es::Field<"colonist_generation", &JobAssignedEvent::colonist_generation>,
+                              es::Field<"resource_index", &JobAssignedEvent::resource_index>,
+                              es::Field<"resource_generation", &JobAssignedEvent::resource_generation>>;
+};
+
+struct ResourceHarvestedEvent {
+    std::uint32_t resource_index = 0;
+    std::uint32_t resource_generation = 0;
+    std::uint32_t kind = 0;
+    std::uint32_t amount = 0;
+
+    [[nodiscard]] ECS::Entity resource() const { return entity(resource_index, resource_generation); }
+
+    static constexpr std::string_view event_name = "colony.resource_harvested";
+    using fields = es::Fields<es::Field<"resource_index", &ResourceHarvestedEvent::resource_index>,
+                              es::Field<"resource_generation", &ResourceHarvestedEvent::resource_generation>,
+                              es::Field<"kind", &ResourceHarvestedEvent::kind>,
+                              es::Field<"amount", &ResourceHarvestedEvent::amount>>;
+};
+
+struct ResourceDepletedEvent {
+    std::int32_t tile_x = 0;
+    std::int32_t tile_y = 0;
+    std::uint32_t kind = 0;
+
+    static constexpr std::string_view event_name = "colony.resource_depleted";
+    using fields = es::Fields<es::Field<"tile_x", &ResourceDepletedEvent::tile_x>,
+                              es::Field<"tile_y", &ResourceDepletedEvent::tile_y>,
+                              es::Field<"kind", &ResourceDepletedEvent::kind>>;
+};
+
+struct ItemDeliveredEvent {
+    std::uint32_t kind = 0;
+    std::uint32_t amount = 0;
+
+    static constexpr std::string_view event_name = "colony.item_delivered";
+    using fields = es::Fields<es::Field<"kind", &ItemDeliveredEvent::kind>, es::Field<"amount", &ItemDeliveredEvent::amount>>;
+};
+
+struct MilestoneEvent {
+    std::uint32_t kind = 0;
+    std::uint32_t total = 0;
+
+    static constexpr std::string_view event_name = "colony.milestone";
+    using fields = es::Fields<es::Field<"kind", &MilestoneEvent::kind>, es::Field<"total", &MilestoneEvent::total>>;
+};
+
+// =============================================================================
+// Модули
+// =============================================================================
+
+/// Orders — ввод игрока превращается в приказы.
+struct Orders {
+    es::EventReader<Core::KeyEvent> keys;
+    es::EventReader<Core::MouseButtonEvent> mouse;
+    es::EventWriter<PlaceOrderEvent> out;
+    bool show_jobs = true;
+
+    void declare(es::EventBus& bus) {
+        const es::ModuleId id = bus.declare_module("Orders")
+                                    .consumes<Core::KeyEvent>()
+                                    .consumes<Core::MouseButtonEvent>()
+                                    .produces<PlaceOrderEvent>();
+        keys = bus.reader<Core::KeyEvent>(id);
+        mouse = bus.reader<Core::MouseButtonEvent>(id);
+        out = bus.writer<PlaceOrderEvent>(id);
+    }
+
+    void tick() {
+        for (const Core::KeyEvent& key : keys.events()) {
+            if (key.action == GLFW_PRESS && key.key == GLFW_KEY_J) show_jobs = !show_jobs;
+        }
+        for (const Core::MouseButtonEvent& click : mouse.events()) {
+            if (click.action != GLFW_PRESS || click.button == GLFW_MOUSE_BUTTON_MIDDLE) continue;
+            out.emit(PlaceOrderEvent{
+                .tile_x = static_cast<std::int32_t>(std::floor(click.world_x / tile)),
+                .tile_y = static_cast<std::int32_t>(std::floor(click.world_y / tile)),
+                .kind = static_cast<std::uint32_t>(click.button == GLFW_MOUSE_BUTTON_LEFT ? ResourceKind::Tree : ResourceKind::Rock),
+            });
+        }
+    }
+};
+
+/// World — карта и ресурсы. Единственный, кто создаёт и уничтожает сущности ресурсов.
+struct World {
+    es::EventReader<PlaceOrderEvent> orders;
+    es::EventReader<ResourceHarvestedEvent> harvested;
+    es::EventWriter<ResourceSpawnedEvent> spawned;
+    es::EventWriter<ResourceDepletedEvent> depleted;
+
+    // Карта уровня живёт в арене: обе таблицы нулевые с рождения (ZII).
+    MemorySystem::Arena level = MemorySystem::Arena::reserve(MemorySystem::MiB(1));
+    std::span<std::uint8_t> terrain;       ///< AtlasCell тайла.
+    std::span<ECS::Entity> tile_owner;     ///< Ресурс на тайле; Entity{} — свободно. Проверка занятости O(1).
+
+    struct Regrowth {
+        es::Tick due;
+        glm::ivec2 near;
+    };
+    std::vector<Regrowth> regrowth; // отложенных событий в шине нет — очередь ведётся вручную
+    std::mt19937 rng{2024};
+
+    void declare(es::EventBus& bus) {
+        const es::ModuleId id = bus.declare_module("World")
+                                    .consumes<PlaceOrderEvent>()
+                                    .consumes<ResourceHarvestedEvent>()
+                                    .produces<ResourceSpawnedEvent>()
+                                    .produces<ResourceDepletedEvent>();
+        orders = bus.reader<PlaceOrderEvent>(id);
+        harvested = bus.reader<ResourceHarvestedEvent>(id);
+        spawned = bus.writer<ResourceSpawnedEvent>(id);
+        depleted = bus.writer<ResourceDepletedEvent>(id);
+    }
+
+    void generate(ECS::World& world) {
+        terrain = level.push_array<std::uint8_t>(map_w * map_h);
+        tile_owner = level.push_array<ECS::Entity>(map_w * map_h);
+        for (std::uint8_t& cell : terrain) {
+            cell = static_cast<std::uint8_t>(std::uniform_int_distribution<int>(0, 9)(rng) == 0 ? Dirt : Grass);
+        }
+        std::uniform_int_distribution<int> x(0, map_w - 1);
+        std::uniform_int_distribution<int> y(0, map_h - 1);
+        for (int i = 0; i < 40; ++i) {
+            spawn(world, {x(rng), y(rng)}, i < 28 ? ResourceKind::Tree : ResourceKind::Rock, false);
+        }
+    }
+
+    [[nodiscard]] ECS::Entity& owner(glm::ivec2 t) { return tile_owner[static_cast<std::size_t>(t.y * map_w + t.x)]; }
+
+    /// Создаёт ресурс; Entity{}, если тайл занят или вне карты.
+    ECS::Entity spawn(ECS::World& world, glm::ivec2 t, ResourceKind kind, bool announce, bool regrown = false) {
+        if (!on_map(t) || in_stockpile(t) || owner(t)) return {};
+        const int amount = kind == ResourceKind::Tree ? 3 : 5;
+        const ECS::Entity e = world.create();
+        world.emplace<Resource>(e, kind, amount, amount);
+        world.emplace<Tile>(e, t);
+        owner(t) = e;
+        if (announce) {
+            spawned.emit(ResourceSpawnedEvent{.resource_index = e.index, .resource_generation = e.generation,
+                                              .tile_x = t.x, .tile_y = t.y, .kind = static_cast<std::uint32_t>(kind),
+                                              .regrown = regrown ? 1u : 0u});
+        }
+        return e;
+    }
+
+    void tick(ECS::World& world, es::Tick now) {
+        for (const PlaceOrderEvent& order : orders.events()) {
+            spawn(world, {order.tile_x, order.tile_y}, static_cast<ResourceKind>(order.kind), true);
+        }
+        for (const ResourceHarvestedEvent& h : harvested.events()) {
+            Resource* res = world.get<Resource>(h.resource());
+            if (res == nullptr) continue; // ресурс уже исчерпан другим колонистом
+            res->amount -= static_cast<int>(h.amount);
+            if (res->amount > 0) continue;
+
+            const glm::ivec2 at = world.get<Tile>(h.resource())->at;
+            const ResourceKind kind = res->kind;
+            depleted.emit(ResourceDepletedEvent{.tile_x = at.x, .tile_y = at.y, .kind = static_cast<std::uint32_t>(kind)});
+            owner(at) = ECS::Entity{};
+            world.destroy(h.resource()); // бронь (Reserved) исчезает вместе с сущностью; ссылки колонистов протухают
+            if (kind == ResourceKind::Tree) regrowth.push_back(Regrowth{.due = now + 900, .near = at});
+        }
+        std::uniform_int_distribution<int> jitter(-3, 3);
+        std::erase_if(regrowth, [&](const Regrowth& g) {
+            if (g.due > now) return false;
+            spawn(world, g.near + glm::ivec2{jitter(rng), jitter(rng)}, ResourceKind::Tree, true, true);
+            return true; // занятый тайл — саженец просто не вырос
+        });
+    }
+};
+
+/// Economy — склад и пороги.
+struct Economy {
+    es::EventReader<ItemDeliveredEvent> delivered;
+    es::EventWriter<MilestoneEvent> milestones;
+    std::array<std::uint32_t, 2> stock{};
+
+    void declare(es::EventBus& bus) {
+        const es::ModuleId id = bus.declare_module("Economy").consumes<ItemDeliveredEvent>().produces<MilestoneEvent>();
+        delivered = bus.reader<ItemDeliveredEvent>(id);
+        milestones = bus.writer<MilestoneEvent>(id);
+    }
+
+    [[nodiscard]] std::uint32_t amount(ResourceKind kind) const { return stock[static_cast<std::size_t>(kind)]; }
+
+    void tick() {
+        for (const ItemDeliveredEvent& item : delivered.events()) {
+            std::uint32_t& value = stock[item.kind];
+            const std::uint32_t before = value;
+            value += item.amount;
+            if (value / 10 != before / 10) milestones.emit(MilestoneEvent{.kind = item.kind, .total = value});
+        }
+    }
+};
+
+/// Jobs — кому что рубить. Владеет компонентами Reserved (на ресурсах) и AwaitingJob (на колонистах).
+struct Jobs {
+    es::EventReader<ResourceHarvestedEvent> harvested;
+    es::EventWriter<JobAssignedEvent> out;
+    std::uint64_t assigned = 0;
+
+    void declare(es::EventBus& bus) {
+        const es::ModuleId id = bus.declare_module("Jobs").consumes<ResourceHarvestedEvent>().produces<JobAssignedEvent>();
+        harvested = bus.reader<ResourceHarvestedEvent>(id);
+        out = bus.writer<JobAssignedEvent>(id);
+    }
+
+    void tick(ECS::World& world, const Economy& economy, es::Tick now) {
+        // Добыча завершена — ресурс свободен для следующего колониста.
+        for (const ResourceHarvestedEvent& h : harvested.events()) world.remove<Reserved>(h.resource());
+
+        // Нужнее тот ресурс, которого на складе меньше.
+        const ResourceKind wanted =
+            economy.amount(ResourceKind::Tree) <= economy.amount(ResourceKind::Rock) ? ResourceKind::Tree : ResourceKind::Rock;
+        auto resources = world.view<const Resource, const Tile>();
+
+        world.view<const Worker, const Position>().each([&](ECS::Entity colonist, const Worker& w, const Position& p) {
+            if (w.state != State::Idle) {
+                world.remove<AwaitingJob>(colonist);
+                return;
+            }
+            // Задание уже отправлено: ждём, пока Colonists его примет. Если за 2 тика не принял
+            // (ресурс исчез раньше), отправляем новое — иначе колонист застрял бы навсегда.
+            if (const AwaitingJob* waiting = world.get<AwaitingJob>(colonist); waiting != nullptr && now - waiting->since <= 2) {
+                return;
+            }
+
+            ECS::Entity best{};
+            float best_score = std::numeric_limits<float>::max();
+            resources.each([&](ECS::Entity r, const Resource& res, const Tile& t) {
+                if (world.has<Reserved>(r)) return;
+                const glm::vec2 d = tile_center(t.at) - p.now;
+                const float score = std::sqrt(d.x * d.x + d.y * d.y) * (res.kind == wanted ? 1.0f : 2.5f);
+                if (score < best_score) {
+                    best_score = score;
+                    best = r;
+                }
+            });
+            if (!best) return;
+            world.emplace<Reserved>(best, colonist);
+            world.emplace<AwaitingJob>(colonist, now);
+            out.emit(JobAssignedEvent{.colonist_index = colonist.index, .colonist_generation = colonist.generation,
+                                      .resource_index = best.index, .resource_generation = best.generation});
+            ++assigned;
+        });
+    }
+};
+
+/// Colonists — конечный автомат колонистов. Создаёт колонистов и меняет только их компоненты.
+struct Colonists {
+    es::EventReader<JobAssignedEvent> jobs;
+    es::EventWriter<ResourceHarvestedEvent> harvested;
+    es::EventWriter<ItemDeliveredEvent> delivered;
+    AnimationLibrary anims;
+    ClipId walk;
+    ClipId work;
+    ClipId idle;
+    std::mt19937 rng{7};
+
+    void declare(es::EventBus& bus) {
+        const es::ModuleId id = bus.declare_module("Colonists")
+                                    .consumes<JobAssignedEvent>()
+                                    .produces<ResourceHarvestedEvent>()
+                                    .produces<ItemDeliveredEvent>();
+        jobs = bus.reader<JobAssignedEvent>(id);
+        harvested = bus.writer<ResourceHarvestedEvent>(id);
+        delivered = bus.writer<ItemDeliveredEvent>(id);
+
+        const SpriteSheetGrid grid{.columns = 8, .rows = 2};
+        walk = anims.add({.name = "colonist.walk", .frames = make_grid_frames(grid, WalkFirst, 4, 0.12f)});
+        work = anims.add({.name = "colonist.work", .frames = make_grid_frames(grid, WorkFirst, 2, 0.2f)});
+        idle = anims.add({.name = "colonist.idle", .frames = make_grid_frames(grid, Idle, 1, 1.0f)});
+    }
+
+    void spawn(ECS::World& world) {
+        std::uniform_real_distribution<float> offset(-20.0f, 20.0f);
+        const glm::vec2 home = stockpile_tiles.center() * tile;
+        for (int i = 0; i < colonist_count; ++i) {
+            const ECS::Entity e = world.create();
+            const glm::vec2 at = home + glm::vec2{offset(rng), offset(rng)};
+            world.emplace<Worker>(e);
+            world.emplace<Position>(e, at, at);
+            world.emplace<Anim>(e, AnimationState::start(idle));
+        }
+    }
+
+    void tick(ECS::World& world, float dt) {
+        for (const JobAssignedEvent& job : jobs.events()) {
+            Worker* w = world.get<Worker>(job.colonist());
+            const Tile* target = world.get<Tile>(job.resource());
+            if (w == nullptr || w->state != State::Idle || target == nullptr) continue; // ресурс мог исчезнуть
+            w->state = State::ToResource;
+            w->target = job.resource();
+            world.get<Position>(job.colonist())->goal = tile_center(target->at) + glm::vec2{-10.0f, 2.0f};
+        }
+
+        std::uniform_int_distribution<int> slot_x(0, static_cast<int>(stockpile_tiles.size.x) - 1);
+        std::uniform_int_distribution<int> slot_y(0, static_cast<int>(stockpile_tiles.size.y) - 1);
+        world.view<Worker, Position, Anim>().each([&](ECS::Entity e, Worker& w, Position& p, Anim& anim) {
+            // Цель исчезла (её исчерпал другой колонист)? Поколение скажет об этом без всяких событий.
+            if ((w.state == State::ToResource || w.state == State::Working) && !world.valid(w.target)) {
+                w.state = State::Idle;
+                w.target = ECS::Entity{};
+            }
+
+            const bool moving = w.state == State::ToResource || w.state == State::ToStockpile;
+            bool arrived = false;
+            if (moving) {
+                const glm::vec2 d = p.goal - p.now;
+                const float distance = std::sqrt(d.x * d.x + d.y * d.y);
+                const float step = colonist_speed * dt;
+                if (distance <= step) {
+                    p.now = p.goal;
+                    arrived = true;
+                } else {
+                    p.now += d / distance * step;
+                    w.facing_left = d.x < 0.0f;
+                }
+            }
+
+            switch (w.state) {
+                case State::ToResource:
+                    if (arrived) {
+                        w.state = State::Working;
+                        w.facing_left = false;
+                        w.work_timer = world.get<Resource>(w.target)->kind == ResourceKind::Tree ? 45 : 70;
+                    }
+                    break;
+                case State::Working:
+                    if (--w.work_timer <= 0) {
+                        const ResourceKind kind = world.get<Resource>(w.target)->kind;
+                        harvested.emit(ResourceHarvestedEvent{.resource_index = w.target.index,
+                                                              .resource_generation = w.target.generation,
+                                                              .kind = static_cast<std::uint32_t>(kind), .amount = 1});
+                        world.emplace<Carrying>(e, kind); // Carrying не в этой выборке: добавлять можно
+                        w.state = State::ToStockpile;
+                        w.target = ECS::Entity{};
+                        p.goal = tile_center({static_cast<int>(stockpile_tiles.position.x) + slot_x(rng),
+                                              static_cast<int>(stockpile_tiles.position.y) + slot_y(rng)});
+                    }
+                    break;
+                case State::ToStockpile:
+                    if (arrived) {
+                        const Carrying* load = world.get<Carrying>(e);
+                        delivered.emit(ItemDeliveredEvent{.kind = static_cast<std::uint32_t>(load->kind), .amount = 1});
+                        world.remove<Carrying>(e);
+                        w.state = State::Idle;
+                    }
+                    break;
+                case State::Idle: break;
+            }
+
+            // Клип зависит от состояния; при смене клипа анимация начинается сначала.
+            const ClipId clip = w.state == State::Working ? work : (w.state == State::Idle ? idle : walk);
+            if (anim.state.clip != clip) anim.state = AnimationState::start(clip);
+            advance_animations(std::span(&anim.state, 1), anims, dt);
+        });
+    }
+};
+
+/// Chronicle — история: видит только события, не данные модулей.
+struct Chronicle {
+    es::EventReader<MilestoneEvent> milestones;
+    es::EventReader<ResourceDepletedEvent> depleted;
+    es::EventReader<ResourceSpawnedEvent> spawned;
+
+    void declare(es::EventBus& bus) {
+        const es::ModuleId id = bus.declare_module("Chronicle")
+                                    .consumes<MilestoneEvent>()
+                                    .consumes<ResourceDepletedEvent>()
+                                    .consumes<ResourceSpawnedEvent>();
+        milestones = bus.reader<MilestoneEvent>(id);
+        depleted = bus.reader<ResourceDepletedEvent>(id);
+        spawned = bus.reader<ResourceSpawnedEvent>(id);
+    }
+
+    void founding(const ECS::World& world) const {
+        int trees = 0;
+        int rocks = 0;
+        if (const auto* pool = world.find_pool<Resource>()) {
+            for (const Resource& r : pool->components()) (r.kind == ResourceKind::Tree ? trees : rocks)++;
+        }
+        std::println("[{}] Chronicle: {} settlers founded a colony among {} trees and {} rocks", game_time(0),
+                     world.count<Worker>(), trees, rocks);
+    }
+
+    void tick(es::Tick now) {
+        for (const MilestoneEvent& m : milestones.events()) {
+            std::println("[{}] Chronicle: the stockpile now holds {} {}", game_time(now), m.total,
+                         kind_name(static_cast<ResourceKind>(m.kind)));
+        }
+        for (const ResourceDepletedEvent& d : depleted.events()) {
+            std::println("[{}] Chronicle: {} at ({}, {}) is gone", game_time(now),
+                         static_cast<ResourceKind>(d.kind) == ResourceKind::Tree ? "a tree" : "a rock", d.tile_x, d.tile_y);
+        }
+        for (const ResourceSpawnedEvent& s : spawned.events()) {
+            const bool tree = static_cast<ResourceKind>(s.kind) == ResourceKind::Tree;
+            std::println("[{}] Chronicle: {} at ({}, {})", game_time(now),
+                         s.regrown ? "a sapling sprouted" : (tree ? "a tree was planted" : "a rock was hauled in"),
+                         s.tile_x, s.tile_y);
+        }
+    }
+};
+
+// =============================================================================
+// Игра: мир ECS + модули, порядок вызова, отрисовка.
 // =============================================================================
 
 class Colony final : public Core::Game {
@@ -198,74 +618,34 @@ public:
 
     void setup(Core::App& app) override {
         es::EventBus& bus = app.bus();
+        orders.declare(bus);
+        map.declare(bus);
+        jobs.declare(bus);
+        colonists.declare(bus);
+        economy.declare(bus);
+        chronicle.declare(bus);
 
-        const es::ModuleId orders = bus.declare_module("Orders")
-                                        .consumes<Core::KeyEvent>()
-                                        .consumes<Core::MouseButtonEvent>()
-                                        .produces<PlaceOrderEvent>();
-        const es::ModuleId world = bus.declare_module("World")
-                                       .consumes<PlaceOrderEvent>()
-                                       .consumes<ResourceHarvestedEvent>()
-                                       .produces<ResourceSpawnedEvent>()
-                                       .produces<ResourceDepletedEvent>();
-        const es::ModuleId jobs = bus.declare_module("Jobs")
-                                      .consumes<ResourceHarvestedEvent>()
-                                      .consumes<ResourceDepletedEvent>()
-                                      .produces<JobAssignedEvent>();
-        const es::ModuleId colonists = bus.declare_module("Colonists")
-                                           .consumes<JobAssignedEvent>()
-                                           .consumes<ResourceDepletedEvent>()
-                                           .produces<ResourceHarvestedEvent>()
-                                           .produces<ItemDeliveredEvent>();
-        const es::ModuleId economy = bus.declare_module("Economy").consumes<ItemDeliveredEvent>().produces<MilestoneEvent>();
-        const es::ModuleId chronicle = bus.declare_module("Chronicle")
-                                           .consumes<MilestoneEvent>()
-                                           .consumes<ResourceDepletedEvent>()
-                                           .consumes<ResourceSpawnedEvent>();
-
-        m_orders_keys = bus.reader<Core::KeyEvent>(orders);
-        m_orders_mouse = bus.reader<Core::MouseButtonEvent>(orders);
-        m_orders_out = bus.writer<PlaceOrderEvent>(orders);
-        m_world_orders = bus.reader<PlaceOrderEvent>(world);
-        m_world_harvested = bus.reader<ResourceHarvestedEvent>(world);
-        m_world_spawned = bus.writer<ResourceSpawnedEvent>(world);
-        m_world_depleted = bus.writer<ResourceDepletedEvent>(world);
-        m_jobs_harvested = bus.reader<ResourceHarvestedEvent>(jobs);
-        m_jobs_depleted = bus.reader<ResourceDepletedEvent>(jobs);
-        m_jobs_out = bus.writer<JobAssignedEvent>(jobs);
-        m_colonists_jobs = bus.reader<JobAssignedEvent>(colonists);
-        m_colonists_depleted = bus.reader<ResourceDepletedEvent>(colonists);
-        m_colonists_harvested = bus.writer<ResourceHarvestedEvent>(colonists);
-        m_colonists_delivered = bus.writer<ItemDeliveredEvent>(colonists);
-        m_economy_delivered = bus.reader<ItemDeliveredEvent>(economy);
-        m_economy_milestones = bus.writer<MilestoneEvent>(economy);
-        m_chronicle_milestones = bus.reader<MilestoneEvent>(chronicle);
-        m_chronicle_depleted = bus.reader<ResourceDepletedEvent>(chronicle);
-        m_chronicle_spawned = bus.reader<ResourceSpawnedEvent>(chronicle);
-
-        m_atlas = app.renderer().create_texture(make_atlas());
-        m_walk = m_anims.add({.name = "colonist.walk", .frames = make_grid_frames({.columns = 8, .rows = 2}, WalkFirst, 4, 0.12f)});
-        m_work = m_anims.add({.name = "colonist.work", .frames = make_grid_frames({.columns = 8, .rows = 2}, WorkFirst, 2, 0.2f)});
-        m_idle = m_anims.add({.name = "colonist.idle", .frames = make_grid_frames({.columns = 8, .rows = 2}, Idle, 1, 1.0f)});
-
-        generate_world();
+        atlas = app.renderer().create_texture(make_atlas());
+        map.generate(world);
+        colonists.spawn(world);
+        chronicle.founding(world);
     }
 
     void tick(Core::App& app) override {
         const es::Tick now = app.tick();
-        tick_orders();
-        tick_world(now);
-        tick_jobs();
-        tick_colonists(app.tick_seconds());
-        tick_economy();
-        tick_chronicle(now);
+        orders.tick();
+        map.tick(world, now);
+        jobs.tick(world, economy, now);
+        colonists.tick(world, app.tick_seconds());
+        economy.tick();
+        chronicle.tick(now);
     }
 
     void render(Core::App& /*app*/, Renderer2D& r) override {
         for (int y = 0; y < map_h; ++y) {
             for (int x = 0; x < map_w; ++x) {
                 const glm::ivec2 t{x, y};
-                const int cell = in_stockpile(t) ? StockpileFloor : m_terrain[static_cast<std::size_t>(y * map_w + x)];
+                const int cell = in_stockpile(t) ? static_cast<int>(StockpileFloor) : map.terrain[static_cast<std::size_t>(y * map_w + x)];
                 r.draw(sprite(tile_center(t), cell, -10));
             }
         }
@@ -274,36 +654,34 @@ public:
         int slot = 0;
         const int slots = static_cast<int>(stockpile_tiles.size.x * stockpile_tiles.size.y);
         for (const auto& [kind, cell] : {std::pair{ResourceKind::Tree, LogItem}, std::pair{ResourceKind::Rock, StoneItem}}) {
-            for (std::uint32_t i = 0; i < std::min<std::uint32_t>(m_stock[static_cast<std::size_t>(kind)], 12) && slot < slots; ++i, ++slot) {
+            for (std::uint32_t i = 0; i < std::min<std::uint32_t>(economy.amount(kind), 12) && slot < slots; ++i, ++slot) {
                 const glm::ivec2 t{static_cast<int>(stockpile_tiles.position.x) + slot % static_cast<int>(stockpile_tiles.size.x),
                                    static_cast<int>(stockpile_tiles.position.y) + slot / static_cast<int>(stockpile_tiles.size.x)};
                 r.draw(sprite(tile_center(t), cell, -8));
             }
         }
 
-        for (const Resource& res : m_resources) {
-            if (!res.alive) continue;
-            const glm::vec2 c = tile_center(res.tile);
+        world.view<const Resource, const Tile>().each([&](const Resource& res, const Tile& t) {
+            const glm::vec2 c = tile_center(t.at);
             r.draw(sprite(c, res.kind == ResourceKind::Tree ? TreeSprite : RockSprite, 0));
             if (res.amount < res.max_amount) {
                 const float fraction = static_cast<float>(res.amount) / static_cast<float>(res.max_amount);
                 r.fill_rect({c + glm::vec2{-7.0f, 7.0f}, {14.0f, 2.0f}}, Color{0, 0, 0, 160}, 1);
                 r.fill_rect({c + glm::vec2{-7.0f, 7.0f}, {14.0f * fraction, 2.0f}}, Colors::yellow, 1);
             }
-        }
+        });
 
-        for (std::size_t i = 0; i < m_pos.size(); ++i) {
-            SpriteInstance s = sprite(m_pos[i], Idle, 2);
-            s.uv = current_uv(m_anim[i], m_anims);
-            s.flip = m_facing_left[i] ? SpriteFlip::X : SpriteFlip::None;
-            r.draw(s);
-            if (m_state[i] == State::ToStockpile) {
-                r.draw(sprite(m_pos[i] + glm::vec2{0.0f, -11.0f}, m_carrying[i] == ResourceKind::Tree ? LogItem : StoneItem, 3));
-            }
-            if (m_show_jobs && m_state[i] != State::Idle) {
-                r.draw_line(m_pos[i], m_goal[i], 1.0f, Color{255, 255, 255, 90}, 4);
-            }
-        }
+        world.view<const Worker, const Position, const Anim>().each(
+            [&](ECS::Entity e, const Worker& w, const Position& p, const Anim& anim) {
+                SpriteInstance s = sprite(p.now, Idle, 2);
+                s.uv = current_uv(anim.state, colonists.anims);
+                s.flip = w.facing_left ? SpriteFlip::X : SpriteFlip::None;
+                r.draw(s);
+                if (const Carrying* load = world.get<Carrying>(e)) {
+                    r.draw(sprite(p.now + glm::vec2{0.0f, -11.0f}, load->kind == ResourceKind::Tree ? LogItem : StoneItem, 3));
+                }
+                if (orders.show_jobs && w.state != State::Idle) r.draw_line(p.now, p.goal, 1.0f, Color{255, 255, 255, 90}, 4);
+            });
     }
 
     void render_overlay(Core::App& /*app*/, Renderer2D& r) override {
@@ -311,323 +689,43 @@ public:
         const Color colors[] = {Color::from_rgba(0x8B5A2BFF), Color::from_rgba(0x9A9AA3FF)};
         for (std::size_t k = 0; k < 2; ++k) {
             const float y = 12.0f + static_cast<float>(k) * 16.0f;
-            r.fill_rect({{12.0f, y}, {static_cast<float>(m_stock[k]) * 3.0f, 10.0f}}, colors[k], 1);
-            for (std::uint32_t mark = 10; mark <= m_stock[k]; mark += 10) {
+            const std::uint32_t amount = economy.stock[k];
+            r.fill_rect({{12.0f, y}, {static_cast<float>(amount) * 3.0f, 10.0f}}, colors[k], 1);
+            for (std::uint32_t mark = 10; mark <= amount; mark += 10) {
                 r.fill_rect({{12.0f + static_cast<float>(mark) * 3.0f - 1.0f, y - 2.0f}, {2.0f, 14.0f}}, Colors::white, 2);
             }
         }
     }
 
     [[nodiscard]] std::string status() const override {
-        const auto alive = std::ranges::count_if(m_resources, [](const Resource& r) { return r.alive; });
-        return std::format("logs {} | stone {} | resources {} | working {}", m_stock[0], m_stock[1], alive,
-                           std::ranges::count(m_state, State::Working));
+        int working = 0;
+        if (const auto* pool = world.find_pool<Worker>()) {
+            for (const Worker& w : pool->components()) working += w.state == State::Working ? 1 : 0;
+        }
+        return std::format("logs {} | stone {} | resources {} | working {}", economy.stock[0], economy.stock[1],
+                           world.count<Resource>(), working);
+    }
+
+    void shutdown(Core::App& app) override {
+        std::println("\n===== Colony : summary after {} ticks ({}) =====", app.tick(), game_time(app.tick()));
+        std::println("stockpile: {} logs, {} stones; jobs assigned {}", economy.stock[0], economy.stock[1], jobs.assigned);
+        std::println("ECS: {} entities ({} resources, {} colonists), {} slots ever used", world.alive(),
+                     world.count<Resource>(), world.count<Worker>(), world.registry().slots());
     }
 
 private:
-    enum class State : std::uint8_t { Idle, ToResource, Working, ToStockpile };
-
-    struct Resource {
-        glm::ivec2 tile;
-        ResourceKind kind;
-        int amount;
-        int max_amount;
-        bool alive;
-    };
-
-    struct Regrowth {
-        es::Tick due;
-        glm::ivec2 near;
-    };
-
     SpriteInstance sprite(glm::vec2 center, int cell, std::int32_t layer) const {
-        return SpriteInstance{.position = center, .size = {tile, tile}, .uv = atlas_uv(cell), .texture = m_atlas, .layer = layer};
+        return SpriteInstance{.position = center, .size = {tile, tile}, .uv = atlas_uv(cell), .texture = atlas, .layer = layer};
     }
 
-    // ------------------------------------------------------------------ генерация
-
-    void generate_world() {
-        m_terrain.resize(map_w * map_h);
-        for (int& cell : m_terrain) cell = std::uniform_int_distribution<int>(0, 9)(m_rng) == 0 ? Dirt : Grass;
-
-        std::uniform_int_distribution<int> x(0, map_w - 1);
-        std::uniform_int_distribution<int> y(0, map_h - 1);
-        for (int i = 0; i < 40; ++i) spawn({x(m_rng), y(m_rng)}, i < 28 ? ResourceKind::Tree : ResourceKind::Rock, false);
-
-        std::uniform_real_distribution<float> offset(-20.0f, 20.0f);
-        const glm::vec2 home = (stockpile_tiles.center()) * tile;
-        for (int i = 0; i < colonist_count; ++i) {
-            m_pos.push_back(home + glm::vec2{offset(m_rng), offset(m_rng)});
-            m_goal.push_back(m_pos.back());
-            m_state.push_back(State::Idle);
-            m_target.push_back(0);
-            m_work_timer.push_back(0);
-            m_carrying.push_back(ResourceKind::Tree);
-            m_facing_left.push_back(false);
-            m_awaiting_job.push_back(false);
-            m_anim.push_back(AnimationState::start(m_idle));
-        }
-        std::println("[{}] Chronicle: {} settlers founded a colony among {} trees and {} rocks", game_time(0),
-                     colonist_count, std::ranges::count(m_resources, ResourceKind::Tree, &Resource::kind),
-                     std::ranges::count(m_resources, ResourceKind::Rock, &Resource::kind));
-    }
-
-    /// Создаёт ресурс; возвращает индекс или -1, если тайл занят.
-    /// Индексы не переиспользуются: без ID с поколением старые события указали бы на новый ресурс.
-    std::int64_t spawn(glm::ivec2 t, ResourceKind kind, bool announce, bool regrown = false) {
-        if (t.x < 0 || t.y < 0 || t.x >= map_w || t.y >= map_h || in_stockpile(t)) return -1;
-        for (const Resource& r : m_resources) {
-            if (r.alive && r.tile == t) return -1;
-        }
-        const int amount = kind == ResourceKind::Tree ? 3 : 5;
-        m_resources.push_back(Resource{.tile = t, .kind = kind, .amount = amount, .max_amount = amount, .alive = true});
-        m_reserved_by.push_back(-1);
-        const auto index = static_cast<std::uint32_t>(m_resources.size() - 1);
-        if (announce) {
-            m_world_spawned.emit(ResourceSpawnedEvent{.resource = index, .tile_x = t.x, .tile_y = t.y,
-                                                      .kind = static_cast<std::uint32_t>(kind), .regrown = regrown ? 1u : 0u});
-        }
-        return index;
-    }
-
-    // ------------------------------------------------------------------ Orders
-
-    void tick_orders() {
-        for (const Core::KeyEvent& key : m_orders_keys.events()) {
-            if (key.action == GLFW_PRESS && key.key == GLFW_KEY_J) m_show_jobs = !m_show_jobs;
-        }
-        for (const Core::MouseButtonEvent& click : m_orders_mouse.events()) {
-            if (click.action != GLFW_PRESS || click.button == GLFW_MOUSE_BUTTON_MIDDLE) continue;
-            m_orders_out.emit(PlaceOrderEvent{
-                .tile_x = static_cast<std::int32_t>(std::floor(click.world_x / tile)),
-                .tile_y = static_cast<std::int32_t>(std::floor(click.world_y / tile)),
-                .kind = static_cast<std::uint32_t>(click.button == GLFW_MOUSE_BUTTON_LEFT ? ResourceKind::Tree : ResourceKind::Rock),
-            });
-        }
-    }
-
-    // ------------------------------------------------------------------ World
-
-    void tick_world(es::Tick now) {
-        for (const PlaceOrderEvent& order : m_world_orders.events()) {
-            spawn({order.tile_x, order.tile_y}, static_cast<ResourceKind>(order.kind), true);
-        }
-        for (const ResourceHarvestedEvent& h : m_world_harvested.events()) {
-            Resource& res = m_resources[h.resource];
-            if (!res.alive) continue;
-            res.amount -= static_cast<int>(h.amount);
-            if (res.amount <= 0) {
-                res.alive = false;
-                m_world_depleted.emit(ResourceDepletedEvent{.resource = h.resource, .tile_x = res.tile.x,
-                                                            .tile_y = res.tile.y, .kind = h.kind});
-                if (res.kind == ResourceKind::Tree) {
-                    // Отложенных событий в шине нет — очередь отрастания ведётся вручную.
-                    m_regrowth.push_back(Regrowth{.due = now + 900, .near = res.tile});
-                }
-            }
-        }
-        std::uniform_int_distribution<int> jitter(-3, 3);
-        std::erase_if(m_regrowth, [&](const Regrowth& g) {
-            if (g.due > now) return false;
-            spawn(g.near + glm::ivec2{jitter(m_rng), jitter(m_rng)}, ResourceKind::Tree, true, true);
-            return true; // занятый тайл — саженец просто не вырос
-        });
-    }
-
-    // ------------------------------------------------------------------ Jobs
-
-    void tick_jobs() {
-        for (const ResourceHarvestedEvent& h : m_jobs_harvested.events()) m_reserved_by[h.resource] = -1;
-        for (const ResourceDepletedEvent& d : m_jobs_depleted.events()) m_reserved_by[d.resource] = -1;
-
-        // Нужнее тот ресурс, которого на складе меньше.
-        const ResourceKind wanted = m_stock[0] <= m_stock[1] ? ResourceKind::Tree : ResourceKind::Rock;
-        for (std::size_t c = 0; c < m_pos.size(); ++c) {
-            if (m_state[c] != State::Idle) {
-                m_awaiting_job[c] = false;
-                continue;
-            }
-            if (m_awaiting_job[c]) continue; // задание уже отправлено, Colonists получит его в следующем тике
-
-            std::int64_t best = -1;
-            float best_score = std::numeric_limits<float>::max();
-            for (std::size_t r = 0; r < m_resources.size(); ++r) {
-                if (!m_resources[r].alive || m_reserved_by[r] >= 0) continue;
-                const glm::vec2 d = tile_center(m_resources[r].tile) - m_pos[c];
-                const float score = std::sqrt(d.x * d.x + d.y * d.y) * (m_resources[r].kind == wanted ? 1.0f : 2.5f);
-                if (score < best_score) {
-                    best_score = score;
-                    best = static_cast<std::int64_t>(r);
-                }
-            }
-            if (best >= 0) {
-                m_reserved_by[static_cast<std::size_t>(best)] = static_cast<std::int32_t>(c);
-                m_jobs_out.emit(JobAssignedEvent{.colonist = static_cast<std::uint32_t>(c), .resource = static_cast<std::uint32_t>(best)});
-                m_awaiting_job[c] = true;
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ Colonists
-
-    void tick_colonists(float dt) {
-        for (const JobAssignedEvent& job : m_colonists_jobs.events()) {
-            if (m_state[job.colonist] != State::Idle || !m_resources[job.resource].alive) continue;
-            m_state[job.colonist] = State::ToResource;
-            m_target[job.colonist] = job.resource;
-            m_goal[job.colonist] = tile_center(m_resources[job.resource].tile) + glm::vec2{-10.0f, 2.0f};
-        }
-        for (const ResourceDepletedEvent& d : m_colonists_depleted.events()) {
-            for (std::size_t c = 0; c < m_pos.size(); ++c) {
-                if (m_target[c] == d.resource && (m_state[c] == State::ToResource || m_state[c] == State::Working)) {
-                    m_state[c] = State::Idle; // кто-то успел раньше
-                }
-            }
-        }
-
-        std::uniform_int_distribution<int> slot_x(0, static_cast<int>(stockpile_tiles.size.x) - 1);
-        std::uniform_int_distribution<int> slot_y(0, static_cast<int>(stockpile_tiles.size.y) - 1);
-        for (std::size_t c = 0; c < m_pos.size(); ++c) {
-            const bool moving = m_state[c] == State::ToResource || m_state[c] == State::ToStockpile;
-            bool arrived = false;
-            if (moving) {
-                const glm::vec2 d = m_goal[c] - m_pos[c];
-                const float distance = std::sqrt(d.x * d.x + d.y * d.y);
-                const float step = colonist_speed * dt;
-                if (distance <= step) {
-                    m_pos[c] = m_goal[c];
-                    arrived = true;
-                } else {
-                    m_pos[c] += d / distance * step;
-                    m_facing_left[c] = d.x < 0.0f;
-                }
-            }
-
-            switch (m_state[c]) {
-                case State::ToResource:
-                    if (arrived) {
-                        m_state[c] = State::Working;
-                        m_facing_left[c] = false;
-                        m_work_timer[c] = m_resources[m_target[c]].kind == ResourceKind::Tree ? 45 : 70;
-                    }
-                    break;
-                case State::Working:
-                    if (--m_work_timer[c] <= 0) {
-                        const Resource& res = m_resources[m_target[c]];
-                        m_colonists_harvested.emit(ResourceHarvestedEvent{.colonist = static_cast<std::uint32_t>(c),
-                                                                          .resource = m_target[c],
-                                                                          .kind = static_cast<std::uint32_t>(res.kind),
-                                                                          .amount = 1});
-                        m_carrying[c] = res.kind;
-                        m_state[c] = State::ToStockpile;
-                        m_goal[c] = tile_center({static_cast<int>(stockpile_tiles.position.x) + slot_x(m_rng),
-                                                 static_cast<int>(stockpile_tiles.position.y) + slot_y(m_rng)});
-                    }
-                    break;
-                case State::ToStockpile:
-                    if (arrived) {
-                        m_colonists_delivered.emit(ItemDeliveredEvent{.colonist = static_cast<std::uint32_t>(c),
-                                                                      .kind = static_cast<std::uint32_t>(m_carrying[c]),
-                                                                      .amount = 1});
-                        m_state[c] = State::Idle;
-                    }
-                    break;
-                case State::Idle: break;
-            }
-
-            // Клип зависит от состояния; при смене клипа анимация начинается сначала.
-            const ClipId clip = m_state[c] == State::Working ? m_work : (m_state[c] == State::Idle ? m_idle : m_walk);
-            if (m_anim[c].clip != clip) m_anim[c] = AnimationState::start(clip);
-        }
-
-        // Все анимации колонистов — один вызов по плотному массиву.
-        advance_animations(m_anim, m_anims, dt);
-    }
-
-    // ------------------------------------------------------------------ Economy
-
-    void tick_economy() {
-        for (const ItemDeliveredEvent& item : m_economy_delivered.events()) {
-            std::uint32_t& stock = m_stock[item.kind];
-            const std::uint32_t before = stock;
-            stock += item.amount;
-            if (stock / 10 != before / 10) {
-                m_economy_milestones.emit(MilestoneEvent{.kind = item.kind, .total = stock});
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ Chronicle
-
-    void tick_chronicle(es::Tick now) {
-        // Хроника — зачаток генерируемой истории: она видит только события, не данные модулей.
-        for (const MilestoneEvent& m : m_chronicle_milestones.events()) {
-            std::println("[{}] Chronicle: the stockpile now holds {} {}", game_time(now), m.total,
-                         m.kind == 0 ? "logs" : "stones");
-        }
-        for (const ResourceDepletedEvent& d : m_chronicle_depleted.events()) {
-            std::println("[{}] Chronicle: {} at ({}, {}) is gone", game_time(now),
-                         d.kind == 0 ? "a tree" : "a rock", d.tile_x, d.tile_y);
-        }
-        for (const ResourceSpawnedEvent& s : m_chronicle_spawned.events()) {
-            std::println("[{}] Chronicle: {} at ({}, {})", game_time(now),
-                         s.regrown ? "a sapling sprouted" : (s.kind == 0 ? "a tree was planted" : "a rock was hauled in"),
-                         s.tile_x, s.tile_y);
-        }
-    }
-
-    // ---- писатели и читатели
-    es::EventReader<Core::KeyEvent> m_orders_keys;
-    es::EventReader<Core::MouseButtonEvent> m_orders_mouse;
-    es::EventWriter<PlaceOrderEvent> m_orders_out;
-    es::EventReader<PlaceOrderEvent> m_world_orders;
-    es::EventReader<ResourceHarvestedEvent> m_world_harvested;
-    es::EventWriter<ResourceSpawnedEvent> m_world_spawned;
-    es::EventWriter<ResourceDepletedEvent> m_world_depleted;
-    es::EventReader<ResourceHarvestedEvent> m_jobs_harvested;
-    es::EventReader<ResourceDepletedEvent> m_jobs_depleted;
-    es::EventWriter<JobAssignedEvent> m_jobs_out;
-    es::EventReader<JobAssignedEvent> m_colonists_jobs;
-    es::EventReader<ResourceDepletedEvent> m_colonists_depleted;
-    es::EventWriter<ResourceHarvestedEvent> m_colonists_harvested;
-    es::EventWriter<ItemDeliveredEvent> m_colonists_delivered;
-    es::EventReader<ItemDeliveredEvent> m_economy_delivered;
-    es::EventWriter<MilestoneEvent> m_economy_milestones;
-    es::EventReader<MilestoneEvent> m_chronicle_milestones;
-    es::EventReader<ResourceDepletedEvent> m_chronicle_depleted;
-    es::EventReader<ResourceSpawnedEvent> m_chronicle_spawned;
-
-    // ---- World
-    std::vector<int> m_terrain;
-    std::vector<Resource> m_resources;
-    std::vector<Regrowth> m_regrowth;
-
-    // ---- Jobs
-    std::vector<std::int32_t> m_reserved_by;
-    std::vector<bool> m_awaiting_job;
-
-    // ---- Colonists: SoA, как будущие компоненты ECS
-    std::vector<glm::vec2> m_pos;
-    std::vector<glm::vec2> m_goal;
-    std::vector<State> m_state;
-    std::vector<std::uint32_t> m_target;
-    std::vector<int> m_work_timer;
-    std::vector<ResourceKind> m_carrying;
-    std::vector<bool> m_facing_left;
-    std::vector<AnimationState> m_anim;
-
-    // ---- Economy
-    std::array<std::uint32_t, 2> m_stock{};
-
-    // ---- рендер
-    TextureHandle m_atlas;
-    AnimationLibrary m_anims;
-    ClipId m_walk;
-    ClipId m_work;
-    ClipId m_idle;
-    bool m_show_jobs = true;
-
-    std::mt19937 m_rng{2024};
+    ECS::World world;
+    Orders orders;
+    World map;
+    Jobs jobs;
+    Colonists colonists;
+    Economy economy;
+    Chronicle chronicle;
+    TextureHandle atlas;
 };
 
 } // namespace
