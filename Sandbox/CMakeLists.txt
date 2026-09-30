@@ -4,6 +4,7 @@
 #   FallingSand  — клеточная симуляция (массовые SoA-события, эффекты)
 #   Colony       — упрощённый RimWorld (цепочки событий между модулями, атлас, анимации)
 #   Ecosystem    — трава, зайцы, лисы (рождения и смерти, ссылки с поколением, модули-структуры)
+#   Swarm        — стенд производительности: 50 000+ агентов, сетка в памяти тика, замеры систем
 #
 # Каркас приложения (окно, рендер, шина, фиксированный тик, ввод → события) живёт
 # в модуле движка Core (Modules/Core). Игра — это Core::Game и одна строка в main().
@@ -21,7 +22,7 @@ else()
     target_compile_options(SandboxWarnings INTERFACE -Wall -Wextra -Wpedantic -Wshadow)
 endif()
 
-foreach(game IN ITEMS FallingSand Colony Ecosystem)
+foreach(game IN ITEMS FallingSand Colony Ecosystem Swarm)
     string(REGEX REPLACE "([a-z])([A-Z])" "\\1_\\2" folder "${game}")
     string(TOLOWER "${folder}" folder)
     add_executable(${game} ${folder}/main.cpp)
