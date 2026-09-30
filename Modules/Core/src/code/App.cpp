@@ -1,4 +1,4 @@
-#include <Sandbox/App.hpp>
+#include <Core/App.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +20,7 @@
 #    pragma GCC diagnostic pop
 #endif
 
-namespace Sandbox {
+namespace Core {
 
 using namespace RendererSystem;
 namespace es = EventSystem;
@@ -31,6 +31,8 @@ AppConfig parse_args(AppConfig config, int argc, char** argv) {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string_view(argv[i]) == "--frames") {
             config.max_frames = std::atoi(argv[i + 1]);
+        } else if (std::string_view(argv[i]) == "--ticks") {
+            config.max_ticks = std::atoi(argv[i + 1]);
         } else if (std::string_view(argv[i]) == "--screenshot") {
             config.screenshot = argv[i + 1];
         }
@@ -40,6 +42,8 @@ AppConfig parse_args(AppConfig config, int argc, char** argv) {
 
 App::App(AppConfig config)
     : m_config(std::move(config)), m_window(m_config.width, m_config.height, m_config.title, true) {
+    m_step.ticks_per_second = m_config.ticks_per_second;
+    m_step.lockstep = m_config.max_ticks >= 0;
     if (m_window.getNativeWindow() == nullptr) {
         throw std::runtime_error("cannot create window / OpenGL context");
     }
@@ -72,11 +76,11 @@ void App::on_key(int key, int action) {
         return;
     }
     switch (key) {
-        case GLFW_KEY_SPACE: m_paused = !m_paused; break;
+        case GLFW_KEY_SPACE: m_step.paused = !m_step.paused; break;
         case GLFW_KEY_EQUAL:
-        case GLFW_KEY_KP_ADD: m_speed = std::min(m_speed * 2, 8); break;
+        case GLFW_KEY_KP_ADD: m_step.speed = std::min(m_step.speed * 2, 8); break;
         case GLFW_KEY_MINUS:
-        case GLFW_KEY_KP_SUBTRACT: m_speed = std::max(m_speed / 2, 1); break;
+        case GLFW_KEY_KP_SUBTRACT: m_step.speed = std::max(m_step.speed / 2, 1); break;
         case GLFW_KEY_F1: print_event_report(); break;
         default: break;
     }
@@ -144,14 +148,11 @@ int App::run(Game& game) {
     m_camera.position = world * 0.5f;
     m_camera.zoom = std::min(m_camera.viewport.x / world.x, m_camera.viewport.y / world.y) * 0.95f;
 
-    const double tick_dt = 1.0 / m_config.ticks_per_second;
-    constexpr int max_ticks_per_frame = 16; // защита от «спирали смерти» на медленном кадре
-
     double last = glfwGetTime();
     double title_timer = 0.0;
     int title_frames = 0;
 
-    for (int frame = 0; !m_window.shouldClose() && frame != m_config.max_frames; ++frame) {
+    for (int frame = 0; !m_window.shouldClose(); ++frame) {
         const double now = glfwGetTime();
         const double frame_dt = std::min(now - last, 0.25);
         last = now;
@@ -161,19 +162,13 @@ int App::run(Game& game) {
         poll_input(static_cast<float>(frame_dt));
 
         // --- симуляция
-        if (!m_paused) {
-            m_tick_accumulator += frame_dt * m_speed;
-            int steps = 0;
-            while (m_tick_accumulator >= tick_dt && steps < max_ticks_per_frame) {
-                game.tick(*this);
-                m_bus.advance_tick();
-                m_tick_accumulator -= tick_dt;
-                ++steps;
-            }
-            if (steps == max_ticks_per_frame) {
-                m_tick_accumulator = 0.0;
-            }
+        for (int steps = m_step.advance(frame_dt); steps > 0; --steps) {
+            game.tick(*this);
+            m_bus.advance_tick();
         }
+
+        const bool last_frame = (m_config.max_frames >= 0 && frame + 1 >= m_config.max_frames) ||
+                                (m_config.max_ticks >= 0 && m_bus.current_tick() >= static_cast<es::Tick>(m_config.max_ticks));
 
         // --- отрисовка
         Renderer2D& r = *m_renderer;
@@ -188,7 +183,7 @@ int App::run(Game& game) {
         draw_bus_overlay();
         r.end();
 
-        if (!m_config.screenshot.empty() && frame + 1 == m_config.max_frames) {
+        if (!m_config.screenshot.empty() && last_frame) {
             save_screenshot(fb_w, fb_h);
         }
         m_window.update();
@@ -199,6 +194,9 @@ int App::run(Game& game) {
             update_title(game, title_frames / title_timer);
             title_timer = 0.0;
             title_frames = 0;
+        }
+        if (last_frame) {
+            break;
         }
     }
 
@@ -231,11 +229,11 @@ void App::draw_bus_overlay() {
 
     // Пауза и скорость — справа сверху.
     const float right = m_camera.viewport.x - 12.0f;
-    if (m_paused) {
+    if (m_step.paused) {
         r.fill_rect({{right - 26.0f, 12.0f}, {9.0f, 28.0f}}, Colors::white, 3);
         r.fill_rect({{right - 11.0f, 12.0f}, {9.0f, 28.0f}}, Colors::white, 3);
     } else {
-        for (int i = 0; i < m_speed; ++i) {
+        for (int i = 0; i < m_step.speed; ++i) {
             r.fill_rect({{right - 10.0f - static_cast<float>(i) * 12.0f, 12.0f}, {8.0f, 16.0f}}, Colors::yellow, 3);
         }
     }
@@ -257,7 +255,7 @@ void App::update_title(Game& game, double fps) {
     // В WindowSystem нет set_title() — обращаемся к GLFW напрямую.
     const std::string title =
         std::format("{} | tick {} | {} | {:.0f} fps | {} draw calls | {}", m_config.title, m_bus.current_tick(),
-                    m_paused ? "PAUSED" : std::format("x{}", m_speed), fps, m_renderer->last_stats().draw_calls,
+                    m_step.paused ? "PAUSED" : std::format("x{}", m_step.speed), fps, m_renderer->last_stats().draw_calls,
                     game.status());
     glfwSetWindowTitle(m_window.getNativeWindow(), title.c_str());
 }
@@ -292,4 +290,4 @@ void App::print_event_report() const {
     }
 }
 
-} // namespace Sandbox
+} // namespace Core

@@ -1,7 +1,10 @@
 #pragma once
 /**
  * @file App.hpp
- * @brief Каркас песочницы: окно + рендер + шина событий, фиксированный тик симуляции.
+ * @brief Слой приложения движка: окно + рендер + шина событий, фиксированный тик симуляции.
+ *
+ * Модуль Core — то, что стоит между main() и игровой логикой. Игра реализует
+ * интерфейс Game, а App владеет окном, рендером и шиной и крутит цикл.
  *
  * Два домена времени:
  * - **кадр** (частота монитора): ввод, камера, отрисовка;
@@ -10,7 +13,8 @@
  * Пауза останавливает тики, но не кадры: камеру можно двигать на паузе.
  */
 
-#include <Sandbox/PlatformEvents.hpp>
+#include <Core/FixedStep.hpp>
+#include <Core/PlatformEvents.hpp>
 
 #include <EventSystem/EventSystem.hpp>
 #include <RendererSystem/RendererSystem.hpp>
@@ -20,21 +24,23 @@
 #include <optional>
 #include <string>
 
-namespace Sandbox {
+namespace Core {
 
 class App;
 
 /// @brief Параметры запуска.
 struct AppConfig {
-    std::string title = "FluxEng Sandbox"; ///< Заголовок окна и префикс файла графа событий.
+    std::string title = "FluxEng";         ///< Заголовок окна и префикс файла графа событий.
     int width = 1280;                      ///< Ширина окна.
     int height = 720;                      ///< Высота окна.
     double ticks_per_second = 30.0;        ///< Частота симуляции при скорости x1.
     int max_frames = -1;                   ///< Выйти через N кадров (для smoke-тестов); -1 — не выходить.
-    std::string screenshot;                ///< Сохранить последний кадр в PNG (пусто — не сохранять).
+    int max_ticks = -1;                    ///< Выйти через N тиков; включает lockstep: один тик на кадр,
+                                           ///< поэтому прогон детерминирован и не зависит от скорости машины.
+    std::string screenshot{};              ///< Сохранить последний кадр в PNG (пусто — не сохранять).
 };
 
-/// @brief Разбирает `--frames N` и `--screenshot file.png` из командной строки.
+/// @brief Разбирает `--frames N`, `--ticks N` и `--screenshot file.png` из командной строки.
 [[nodiscard]] AppConfig parse_args(AppConfig config, int argc, char** argv);
 
 /// @brief Состояние мыши за текущий кадр.
@@ -100,9 +106,11 @@ public:
     [[nodiscard]] EventSystem::ModuleId platform_module() const noexcept { return m_platform; }
 
     /// @brief Длительность тика симуляции в игровых секундах (не зависит от скорости).
-    [[nodiscard]] float tick_seconds() const noexcept { return static_cast<float>(1.0 / m_config.ticks_per_second); }
+    [[nodiscard]] float tick_seconds() const noexcept { return static_cast<float>(m_step.tick_seconds()); }
     /// @brief Номер текущего тика.
     [[nodiscard]] EventSystem::Tick tick() const noexcept { return m_bus.current_tick(); }
+    /// @brief Доля пути к следующему тику, [0, 1): отрисовка может интерполировать движение.
+    [[nodiscard]] float tick_alpha() const noexcept { return m_step.alpha(); }
 
     /// @brief Печатает граф событий, предупреждения и статистику каналов.
     void print_event_report() const;
@@ -125,12 +133,10 @@ private:
     EventSystem::EventWriter<KeyEvent> m_key_out;
     EventSystem::EventWriter<MouseButtonEvent> m_mouse_out;
 
-    bool m_paused = false;
-    int m_speed = 1;
+    FixedStep m_step;
     float m_pending_scroll = 0.0f;
-    double m_tick_accumulator = 0.0;
 
     static App* s_active; // для C-колбэка колеса мыши (WindowSystem его не пробрасывает)
 };
 
-} // namespace Sandbox
+} // namespace Core

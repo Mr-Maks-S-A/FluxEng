@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file PlatformEvents.hpp
- * @brief События платформы (ввод), которые каркас Sandbox отправляет в шину от имени модуля "Platform".
+ * @brief События платформы (ввод), которые слой приложения (Core::App) отправляет в шину от имени модуля "Platform".
  */
 
 #include <EventSystem/EventSystem.hpp>
@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace Sandbox {
+namespace Core {
 
 /// @brief Клавиша нажата / отпущена / повторена (коды и действия GLFW).
 struct KeyEvent {
@@ -37,4 +37,4 @@ struct MouseButtonEvent {
         EventSystem::Field<"world_y", &MouseButtonEvent::world_y>>;
 };
 
-} // namespace Sandbox
+} // namespace Core

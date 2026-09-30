@@ -7,3 +7,4 @@ add_subdirectory( EventSystem )
 add_subdirectory( WindowSystem )
 add_subdirectory( ECSSystem )
 add_subdirectory( RendererSystem )
+add_subdirectory( Core )           # слой приложения: зависит от модулей выше

@@ -13,10 +13,10 @@
  *   Jobs ──job_assigned──▶ Colonists ──item_delivered──▶ Economy ──milestone──▶ Chronicle
  *
  * Управление: ЛКМ — посадить дерево, ПКМ — положить камень, J — линии заданий.
- * Общие клавиши — см. Sandbox::App.
+ * Общие клавиши — см. Core::App.
  */
 
-#include <Sandbox/App.hpp>
+#include <Core/Core.hpp>
 
 #include <algorithm>
 #include <array>
@@ -192,16 +192,16 @@ std::string game_time(es::Tick tick) {
 
 // =============================================================================
 
-class Colony final : public Sandbox::Game {
+class Colony final : public Core::Game {
 public:
     [[nodiscard]] glm::vec2 world_size() const override { return {map_w * tile, map_h * tile}; }
 
-    void setup(Sandbox::App& app) override {
+    void setup(Core::App& app) override {
         es::EventBus& bus = app.bus();
 
         const es::ModuleId orders = bus.declare_module("Orders")
-                                        .consumes<Sandbox::KeyEvent>()
-                                        .consumes<Sandbox::MouseButtonEvent>()
+                                        .consumes<Core::KeyEvent>()
+                                        .consumes<Core::MouseButtonEvent>()
                                         .produces<PlaceOrderEvent>();
         const es::ModuleId world = bus.declare_module("World")
                                        .consumes<PlaceOrderEvent>()
@@ -223,8 +223,8 @@ public:
                                            .consumes<ResourceDepletedEvent>()
                                            .consumes<ResourceSpawnedEvent>();
 
-        m_orders_keys = bus.reader<Sandbox::KeyEvent>(orders);
-        m_orders_mouse = bus.reader<Sandbox::MouseButtonEvent>(orders);
+        m_orders_keys = bus.reader<Core::KeyEvent>(orders);
+        m_orders_mouse = bus.reader<Core::MouseButtonEvent>(orders);
         m_orders_out = bus.writer<PlaceOrderEvent>(orders);
         m_world_orders = bus.reader<PlaceOrderEvent>(world);
         m_world_harvested = bus.reader<ResourceHarvestedEvent>(world);
@@ -251,7 +251,7 @@ public:
         generate_world();
     }
 
-    void tick(Sandbox::App& app) override {
+    void tick(Core::App& app) override {
         const es::Tick now = app.tick();
         tick_orders();
         tick_world(now);
@@ -261,7 +261,7 @@ public:
         tick_chronicle(now);
     }
 
-    void render(Sandbox::App& /*app*/, Renderer2D& r) override {
+    void render(Core::App& /*app*/, Renderer2D& r) override {
         for (int y = 0; y < map_h; ++y) {
             for (int x = 0; x < map_w; ++x) {
                 const glm::ivec2 t{x, y};
@@ -306,7 +306,7 @@ public:
         }
     }
 
-    void render_overlay(Sandbox::App& /*app*/, Renderer2D& r) override {
+    void render_overlay(Core::App& /*app*/, Renderer2D& r) override {
         // Запасы склада: коричневая полоса — брёвна, серая — камень, засечка каждые 10 штук.
         const Color colors[] = {Color::from_rgba(0x8B5A2BFF), Color::from_rgba(0x9A9AA3FF)};
         for (std::size_t k = 0; k < 2; ++k) {
@@ -393,10 +393,10 @@ private:
     // ------------------------------------------------------------------ Orders
 
     void tick_orders() {
-        for (const Sandbox::KeyEvent& key : m_orders_keys.events()) {
+        for (const Core::KeyEvent& key : m_orders_keys.events()) {
             if (key.action == GLFW_PRESS && key.key == GLFW_KEY_J) m_show_jobs = !m_show_jobs;
         }
-        for (const Sandbox::MouseButtonEvent& click : m_orders_mouse.events()) {
+        for (const Core::MouseButtonEvent& click : m_orders_mouse.events()) {
             if (click.action != GLFW_PRESS || click.button == GLFW_MOUSE_BUTTON_MIDDLE) continue;
             m_orders_out.emit(PlaceOrderEvent{
                 .tile_x = static_cast<std::int32_t>(std::floor(click.world_x / tile)),
@@ -577,8 +577,8 @@ private:
     }
 
     // ---- писатели и читатели
-    es::EventReader<Sandbox::KeyEvent> m_orders_keys;
-    es::EventReader<Sandbox::MouseButtonEvent> m_orders_mouse;
+    es::EventReader<Core::KeyEvent> m_orders_keys;
+    es::EventReader<Core::MouseButtonEvent> m_orders_mouse;
     es::EventWriter<PlaceOrderEvent> m_orders_out;
     es::EventReader<PlaceOrderEvent> m_world_orders;
     es::EventReader<ResourceHarvestedEvent> m_world_harvested;
@@ -633,15 +633,5 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    try {
-        Sandbox::AppConfig config;
-        config.title = "Colony";
-        config.ticks_per_second = 30.0;
-        Sandbox::App app(Sandbox::parse_args(std::move(config), argc, argv));
-        Colony game;
-        return app.run(game);
-    } catch (const std::exception& error) {
-        std::println(stderr, "Colony: {}", error.what());
-        return 1;
-    }
+    return Core::run<Colony>({.title = "Colony", .ticks_per_second = 30.0}, argc, argv);
 }

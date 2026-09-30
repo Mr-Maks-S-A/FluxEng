@@ -1,45 +1,34 @@
 # ==============================================================================
-# Sandbox — объединяющий проект: EventSystem + RendererSystem + WindowSystem.
+# Sandbox — игры на движке FluxEng: проверка модулей в настоящем игровом коде.
 #
-#   SandboxCore  — общий каркас (окно, рендер, шина, фиксированный тик, ввод → события)
 #   FallingSand  — клеточная симуляция (массовые SoA-события, эффекты)
 #   Colony       — упрощённый RimWorld (цепочки событий между модулями, атлас, анимации)
 #
+# Каркас приложения (окно, рендер, шина, фиксированный тик, ввод → события) живёт
+# в модуле движка Core (Modules/Core). Игра — это Core::Game и одна строка в main().
+#
 # Запуск: bin/FallingSand, bin/Colony. `--frames N` — выйти через N кадров,
-# `--screenshot file.png` — сохранить последний кадр (вместе с --frames).
+# `--ticks N` — ровно N тиков по одному на кадр (детерминированно),
+# `--screenshot file.png` — сохранить последний кадр.
 # ==============================================================================
 
-add_library(SandboxCore STATIC common/src/App.cpp)
-target_include_directories(SandboxCore PUBLIC common/include)
-target_link_libraries(SandboxCore PUBLIC
-    engine::EventSystem
-    engine::RendererSystem
-    engine::WindowSystem
-    glfw
-    stb
-)
-target_compile_features(SandboxCore PUBLIC cxx_std_23)
-
 # Прикладной код: строгие предупреждения, но без -Wconversion (игровой код полон int↔float).
+add_library(SandboxWarnings INTERFACE)
 if(MSVC)
-    target_compile_options(SandboxCore PUBLIC /W4 /utf-8)
+    target_compile_options(SandboxWarnings INTERFACE /W4 /utf-8)
 else()
-    target_compile_options(SandboxCore PUBLIC -Wall -Wextra -Wpedantic -Wshadow)
+    target_compile_options(SandboxWarnings INTERFACE -Wall -Wextra -Wpedantic -Wshadow)
 endif()
-
-# Сторонние библиотеки уже подключены как SYSTEM (cmake/FluxModule.cmake).
-# Заголовок WindowSystem пока не чист под -Wshadow/-Wpedantic — тоже системный.
-target_include_directories(SandboxCore SYSTEM PUBLIC $<TARGET_PROPERTY:engine::WindowSystem,INTERFACE_INCLUDE_DIRECTORIES>)
 
 foreach(game IN ITEMS FallingSand Colony)
     string(REGEX REPLACE "([a-z])([A-Z])" "\\1_\\2" folder "${game}")
     string(TOLOWER "${folder}" folder)
     add_executable(${game} ${folder}/main.cpp)
-    target_link_libraries(${game} PRIVATE SandboxCore)
+    target_link_libraries(${game} PRIVATE engine::Core SandboxWarnings)
 
     if(BUILD_TESTING)
-        # Smoke-тест с GPU: открыть окно, прожить ~2 секунды, выйти без ошибок.
-        add_test(NAME Sandbox.${game} COMMAND ${game} --frames 240)
+        # Smoke-тест с GPU: открыть окно, прожить 300 тиков (по одному на кадр), выйти без ошибок.
+        add_test(NAME Sandbox.${game} COMMAND ${game} --ticks 300)
         set_tests_properties(Sandbox.${game} PROPERTIES LABELS "gpu;sandbox" TIMEOUT 60)
     endif()
 endforeach()

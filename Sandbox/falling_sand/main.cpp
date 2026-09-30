@@ -10,10 +10,10 @@
  * - ввод приходит из шины (`platform.key`), а не из колбэков окна.
  *
  * Управление: ЛКМ — рисовать, ПКМ — стирать, 1–5 — материал (песок, вода, камень, дерево, огонь),
- * [ / ] — размер кисти. Общие клавиши — см. Sandbox::App.
+ * [ / ] — размер кисти. Общие клавиши — см. Core::App.
  */
 
-#include <Sandbox/App.hpp>
+#include <Core/Core.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -95,16 +95,16 @@ Color material_color(Material m, int x, int y, std::uint8_t life) {
 
 // =============================================================================
 
-class FallingSand final : public Sandbox::Game {
+class FallingSand final : public Core::Game {
 public:
     [[nodiscard]] glm::vec2 world_size() const override { return {grid_w * cell_size, grid_h * cell_size}; }
 
-    void setup(Sandbox::App& app) override {
+    void setup(Core::App& app) override {
         es::EventBus& bus = app.bus();
 
         // ---- контракты модулей: это и есть граф, который App печатает на старте
         const es::ModuleId brush = bus.declare_module("Brush")
-                                       .consumes<Sandbox::KeyEvent>()
+                                       .consumes<Core::KeyEvent>()
                                        .produces<PaintEvent>(es::ChannelConfig{.reserve = 256, .max_events_per_tick = 2048});
         const es::ModuleId weather = bus.declare_module("Weather").produces<PaintEvent>();
         const es::ModuleId simulation =
@@ -116,7 +116,7 @@ public:
         const es::ModuleId view = bus.declare_module("View").consumes<CellChangedEvent>();
         const es::ModuleId effects = bus.declare_module("Effects").consumes<IgnitedEvent>();
 
-        m_brush_keys = bus.reader<Sandbox::KeyEvent>(brush);
+        m_brush_keys = bus.reader<Core::KeyEvent>(brush);
         m_brush_out = bus.writer<PaintEvent>(brush);
         m_weather_out = bus.writer<PaintEvent>(weather);
         m_sim_paint = bus.reader<PaintEvent>(simulation);
@@ -146,7 +146,7 @@ public:
             .name = "fx.spark", .frames = make_grid_frames({.columns = 4, .rows = 1}, 0, 4, 0.06f), .looping = false});
     }
 
-    void tick(Sandbox::App& app) override {
+    void tick(Core::App& app) override {
         tick_brush(app);
         tick_weather(app);
         tick_simulation();
@@ -154,7 +154,7 @@ public:
         tick_effects(app);
     }
 
-    void render(Sandbox::App& app, Renderer2D& r) override {
+    void render(Core::App& app, Renderer2D& r) override {
         r.fill_rect({{0.0f, 0.0f}, world_size()}, Color::from_rgba(0x0E1016FF), -10);
 
         // View рисует своё зеркало мира, собранное только из событий.
@@ -180,7 +180,7 @@ public:
         r.draw_rect({m - half, glm::vec2(half * 2.0f)}, 1.5f, material_color(m_brush, 0, 0, 0).with_alpha(200), 10);
     }
 
-    void render_overlay(Sandbox::App& app, Renderer2D& r) override {
+    void render_overlay(Core::App& app, Renderer2D& r) override {
         // Палитра материалов слева сверху; выбранный — в рамке.
         for (int i = 1; i <= 5; ++i) {
             const Rect slot{{12.0f + static_cast<float>(i - 1) * 30.0f, 12.0f}, {24.0f, 24.0f}};
@@ -208,14 +208,14 @@ private:
 
     // ------------------------------------------------------------------ Brush
 
-    void tick_brush(Sandbox::App& app) {
-        for (const Sandbox::KeyEvent& key : m_brush_keys.events()) {
+    void tick_brush(Core::App& app) {
+        for (const Core::KeyEvent& key : m_brush_keys.events()) {
             if (key.action != GLFW_PRESS) continue;
             if (key.key >= GLFW_KEY_1 && key.key <= GLFW_KEY_5) m_brush = static_cast<Material>(key.key - GLFW_KEY_1 + 1);
             if (key.key == GLFW_KEY_LEFT_BRACKET) m_radius = std::max(m_radius - 1, 0);
             if (key.key == GLFW_KEY_RIGHT_BRACKET) m_radius = std::min(m_radius + 1, 12);
         }
-        const Sandbox::FrameInput& in = app.input();
+        const Core::FrameInput& in = app.input();
         if (in.down[0] || in.down[1]) {
             const auto x = static_cast<std::int32_t>(in.mouse_world.x / cell_size);
             const auto y = static_cast<std::int32_t>(in.mouse_world.y / cell_size);
@@ -227,7 +227,7 @@ private:
 
     // ------------------------------------------------------------------ Weather (демо-активность)
 
-    void tick_weather(Sandbox::App& app) {
+    void tick_weather(Core::App& app) {
         const es::Tick tick = app.tick();
         m_weather_out.emit(PaintEvent{.x = 45, .y = 2, .material = static_cast<std::uint32_t>(Material::Sand), .radius = 1});
         if (tick % 2 == 0) {
@@ -401,7 +401,7 @@ private:
 
     // ------------------------------------------------------------------ Effects
 
-    void tick_effects(Sandbox::App& app) {
+    void tick_effects(Core::App& app) {
         for (const IgnitedEvent& ignition : m_effects_ignited.events()) {
             if (m_flashes.size() >= 96) break;
             m_flashes.push_back(Flash{
@@ -419,7 +419,7 @@ private:
     }
 
     // ---- писатели и читатели модулей
-    es::EventReader<Sandbox::KeyEvent> m_brush_keys;
+    es::EventReader<Core::KeyEvent> m_brush_keys;
     es::EventWriter<PaintEvent> m_brush_out;
     es::EventWriter<PaintEvent> m_weather_out;
     es::EventReader<PaintEvent> m_sim_paint;
@@ -456,15 +456,5 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    try {
-        Sandbox::AppConfig config;
-        config.title = "FallingSand";
-        config.ticks_per_second = 30.0;
-        Sandbox::App app(Sandbox::parse_args(std::move(config), argc, argv));
-        FallingSand game;
-        return app.run(game);
-    } catch (const std::exception& error) {
-        std::println(stderr, "FallingSand: {}", error.what());
-        return 1;
-    }
+    return Core::run<FallingSand>({.title = "FallingSand", .ticks_per_second = 30.0}, argc, argv);
 }
