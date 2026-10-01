@@ -1,0 +1,19 @@
+/**
+ * @file examples.dox
+ * @brief Список примеров модуля (сами файлы — в examples/, собираются и запускаются как smoke-тесты).
+ */
+
+/**
+ * @example 01_tasks.cpp
+ * Задачи и счётчики: run/wait, TaskGroup, вложенные задачи, исключение из задачи.
+ */
+
+/**
+ * @example 02_parallel_for.cpp
+ * parallel_for и parallel_reduce: движение частиц, сравнение времени 0 и N потоков.
+ */
+
+/**
+ * @example 03_deterministic_output.cpp
+ * ChunkBuffers: параллельная система порождает события, итог побитово одинаков при любом числе потоков.
+ */

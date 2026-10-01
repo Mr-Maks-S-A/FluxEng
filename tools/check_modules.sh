@@ -14,7 +14,7 @@ shift || true
 
 mkdir -p "${build_root}"
 
-modules=(MemorySystem EventSystem WindowSystem ECSSystem RendererSystem Core)
+modules=(MemorySystem JobSystem EventSystem WindowSystem ECSSystem RendererSystem Core)
 failed=()
 
 for module in "${modules[@]}"; do
