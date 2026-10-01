@@ -83,8 +83,11 @@ void App::on_key(int key, int action) {
     if (action != GLFW_PRESS) {
         return;
     }
+    if (key == m_config.pause_key) {
+        m_step.paused = !m_step.paused;
+        return;
+    }
     switch (key) {
-        case GLFW_KEY_SPACE: m_step.paused = !m_step.paused; break;
         case GLFW_KEY_EQUAL:
         case GLFW_KEY_KP_ADD: m_step.speed = std::min(m_step.speed * 2, 8); break;
         case GLFW_KEY_MINUS:
