@@ -6,17 +6,20 @@
  * 1. Grid      — пространственная сетка (сортировка подсчётом) во временной памяти тика
  *                (MemorySystem: выделение — сдвиг указателя, освобождение — reset после тика);
  * 2. Steering  — стая: разлёт с соседями, выравнивание, притяжение к аттракторам (ЛКМ — к курсору,
- *                ПКМ — от курсора); соседи ищутся только в 3×3 клетках сетки;
- * 3. Movement  — интегрирование по плотному массиву компонентов ECS;
+ *                ПКМ — от курсора); соседи ищутся только в 3×3 клетках сетки.
+ *                **Параллельно** (JobSystem::parallel_for): читает снимок сетки, пишет только свою строку;
+ * 3. Movement  — интегрирование по плотному массиву компонентов ECS, тоже параллельно;
  * 4. Hazards   — вращающиеся лезвия сбивают агентов: массовое SoA-событие `swarm.hit`;
  * 0. Population — первым в тике: единственный владелец структуры мира. Уничтожает сбитых
  *                в прошлом тике (устаревшие ссылки отсекает поколение) и рождает новых.
  *                Первым — чтобы сбитые не попадали под лезвия второй раз.
  *
  * Profiler замеряет каждую систему и отрисовку, рисует столбики в оверлее и печатает отчёт
- * каждые 300 тиков и в конце. Детерминирован: `--ticks N` даёт одинаковый результат.
+ * каждые 300 тиков и в конце. Детерминирован: `--ticks N` даёт одинаковый результат
+ * (и одинаковую контрольную сумму мира) при любом `--threads N`.
  *
- * Управление: [ / ] — вдвое меньше / больше агентов, ЛКМ — притягивать к курсору, ПКМ — отталкивать.
+ * Управление: [ / ] — вдвое меньше / больше агентов, ЛКМ — притягивать к курсору, ПКМ — отталкивать,
+ * T — переключить параллельные системы (app.jobs()) ↔ всё в главном потоке.
  * Аргументы: `--agents N` (по умолчанию 50 000); `--no-draw` — не рисовать агентов (чистые замеры
  * симуляции: без видеокарты программный OpenGL отнимает ядра у тика). Общие клавиши — см. Core::App.
  */
@@ -26,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -219,13 +223,22 @@ struct Steering {
         attractors[2] = c + glm::vec2{std::sin(t * 0.19f + 4.0f) * 700.0f, std::cos(t * 0.29f + 0.5f) * 280.0f};
     }
 
-    void tick(ECS::ComponentPool<Body>& bodies, const SpatialGrid& grid, const Core::FrameInput& input, float dt) {
-        std::span<Body> b = bodies.components();
+    /// Каждый агент читает только снимок сетки и пишет только свою строку пула: куски независимы,
+    /// результат не зависит от числа потоков.
+    void tick(JobSystem::Scheduler& jobs, ECS::ComponentPool<Body>& bodies, const SpatialGrid& grid,
+              const Core::FrameInput& input, float dt) const {
+        JobSystem::parallel_for(jobs, grid.position.size(), 1024, [&](std::size_t begin, std::size_t end) {
+            steer_range(bodies.components(), grid, input, dt, begin, end);
+        });
+    }
+
+    void steer_range(std::span<Body> b, const SpatialGrid& grid, const Core::FrameInput& input, float dt,
+                     std::size_t begin, std::size_t end) const {
         const bool attract = input.down[0];
         const bool repel = input.down[1];
         const glm::vec2 mouse = input.mouse_world;
 
-        for (std::size_t sorted = 0; sorted < grid.position.size(); ++sorted) {
+        for (std::size_t sorted = begin; sorted < end; ++sorted) {
             const glm::vec2 p = grid.position[sorted];
             const glm::vec2 v = grid.velocity[sorted];
             const int cx = std::clamp(static_cast<int>(p.x / cell), 0, cells_x - 1);
@@ -287,14 +300,17 @@ struct Steering {
 
 /// Movement — интегрирование по плотному массиву пула; мир замкнут (выход справа — вход слева).
 struct Movement {
-    static void tick(ECS::ComponentPool<Body>& bodies, float dt) {
-        for (Body& body : bodies.components()) {
-            body.position += body.velocity * dt;
-            if (body.position.x < 0.0f) body.position.x += world_w;
-            if (body.position.x >= world_w) body.position.x -= world_w;
-            if (body.position.y < 0.0f) body.position.y += world_h;
-            if (body.position.y >= world_h) body.position.y -= world_h;
-        }
+    static void tick(JobSystem::Scheduler& jobs, ECS::ComponentPool<Body>& bodies, float dt) {
+        const std::span<Body> all = bodies.components();
+        JobSystem::parallel_for(jobs, all.size(), 16384, [&](std::size_t begin, std::size_t end) {
+            for (Body& body : all.subspan(begin, end - begin)) {
+                body.position += body.velocity * dt;
+                if (body.position.x < 0.0f) body.position.x += world_w;
+                if (body.position.x >= world_w) body.position.x -= world_w;
+                if (body.position.y < 0.0f) body.position.y += world_h;
+                if (body.position.y >= world_h) body.position.y -= world_h;
+            }
+        });
     }
 };
 
@@ -349,6 +365,7 @@ struct Population {
     std::uint64_t destroyed = 0;
     std::uint64_t stale = 0;          ///< Попадания по уже уничтоженному агенту (задело два лезвия сразу).
     std::uint64_t window_hits = 0;
+    bool parallel = true;             ///< T: системы на app.jobs() или в главном потоке.
     std::mt19937 rng{2718};
 
     void declare(es::EventBus& bus) {
@@ -360,6 +377,7 @@ struct Population {
     void tick(ECS::World& world) {
         for (const Core::KeyEvent& key : keys.events()) {
             if (key.action != GLFW_PRESS) continue;
+            if (key.key == GLFW_KEY_T) parallel = !parallel;
             if (key.key == GLFW_KEY_LEFT_BRACKET) target = std::max(target / 2, min_agents);
             if (key.key == GLFW_KEY_RIGHT_BRACKET) target = std::min(target * 2, max_agents);
         }
@@ -414,22 +432,25 @@ public:
         population.declare(app.bus());
         hazards.spawn(world);
         population.spawn(world, population.target);
-        std::println("Swarm: {} agents, grid {}x{} cells of {} units", population.target, cells_x, cells_y, cell);
+        std::println("Swarm: {} agents, grid {}x{} cells of {} units, {} job threads", population.target, cells_x,
+                     cells_y, cell, app.jobs().threads());
     }
 
     void tick(Core::App& app) override {
         const float dt = app.tick_seconds();
         auto& bodies = world.pool<Body>();
         ms::Arena& scratch = app.tick_arena();
+        // Тот же код систем, другой планировщик: без фоновых потоков parallel_for идёт в главном потоке.
+        JobSystem::Scheduler& jobs = population.parallel ? app.jobs() : serial_jobs;
 
         // Сначала структура мира: сбитые в прошлом тике исчезают до того, как лезвия посмотрят снова.
         profiler.measure(Profiler::Population, [&] { population.tick(world); });
         profiler.measure(Profiler::Grid, [&] { grid.build(scratch, bodies); });
         profiler.measure(Profiler::Steering, [&] {
             steering.update_attractors(app.tick());
-            steering.tick(bodies, grid, app.input(), dt);
+            steering.tick(jobs, bodies, grid, app.input(), dt);
         });
-        profiler.measure(Profiler::Movement, [&] { Movement::tick(bodies, dt); });
+        profiler.measure(Profiler::Movement, [&] { Movement::tick(jobs, bodies, dt); });
         profiler.measure(Profiler::Hazards, [&] { hazards.tick(world, bodies, grid, dt); });
         peak_tick_memory = std::max(peak_tick_memory, scratch.used());
 
@@ -465,7 +486,8 @@ public:
     void render_overlay(Core::App& app, Renderer2D& r) override { profiler.render_overlay(r, app.camera().viewport); }
 
     [[nodiscard]] std::string status() const override {
-        return std::format("{} agents | tick {:.2f} ms (steering {:.2f}) | render {:.2f} ms", world.count<Body>(),
+        return std::format("{} agents | {} | tick {:.2f} ms (steering {:.2f}) | render {:.2f} ms", world.count<Body>(),
+                           population.parallel ? "parallel [T]" : "main thread [T]",
                            profiler.last_ms[0] + profiler.last_ms[1] + profiler.last_ms[2] + profiler.last_ms[3] +
                                profiler.last_ms[4],
                            profiler.last_ms[Profiler::Steering], profiler.last_ms[Profiler::Render]);
@@ -489,7 +511,15 @@ public:
                      world.registry().slots(), population.destroyed, population.stale);
         std::println("tick memory peak: {:.2f} MiB (allocated and freed every tick, zero malloc)",
                      static_cast<double>(peak_tick_memory) / (1024.0 * 1024.0));
-        (void)app;
+        // Контрольная сумма мира: одинакова при любом --threads (см. Sandbox/README.md).
+        std::uint64_t checksum = 1469598103934665603ULL;
+        for (const Body& body : world.pool<Body>().components()) {
+            for (const float f : {body.position.x, body.position.y, body.velocity.x, body.velocity.y}) {
+                checksum = (checksum ^ std::bit_cast<std::uint32_t>(f)) * 1099511628211ULL;
+            }
+        }
+        std::println("jobs: {} background threads, {} jobs run; world checksum {:016x}", app.jobs().threads(),
+                     app.jobs().stats().jobs_executed, checksum);
     }
 
 private:
@@ -499,6 +529,7 @@ private:
     Hazards hazards;
     Population population;
     Profiler profiler;
+    JobSystem::Scheduler serial_jobs{{.threads = 0, .scratch_bytes = ms::KiB(64)}};
     std::size_t peak_tick_memory = 0;
     bool draw_agents = true;
 };

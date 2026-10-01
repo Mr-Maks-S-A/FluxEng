@@ -33,6 +33,8 @@ AppConfig parse_args(AppConfig config, int argc, char** argv) {
             config.max_frames = std::atoi(argv[++i]);
         } else if (arg == "--ticks" && has_value) {
             config.max_ticks = std::atoi(argv[++i]);
+        } else if (arg == "--threads" && has_value) {
+            config.threads = std::max(0, std::atoi(argv[++i]));
         } else if (arg == "--screenshot" && has_value) {
             config.screenshot = argv[++i];
         } else {
@@ -54,7 +56,10 @@ WindowSystem::Window open_window(const AppConfig& config) {
 
 } // namespace
 
-App::App(AppConfig config) : m_config(std::move(config)), m_window(open_window(m_config)) {
+App::App(AppConfig config)
+    : m_config(std::move(config)), m_window(open_window(m_config)),
+      m_jobs(JobSystem::SchedulerConfig{
+          .threads = m_config.threads >= 0 ? static_cast<unsigned>(m_config.threads) : JobSystem::default_threads()}) {
     m_step.ticks_per_second = m_config.ticks_per_second;
     m_step.lockstep = m_config.max_ticks >= 0;
     auto renderer = Renderer2D::create();
@@ -140,7 +145,8 @@ int App::run(Game& game) {
     std::ranges::replace(dot_name, ' ', '_');
     dot_name += "_events.dot";
     std::ofstream(dot_name) << graph.to_dot();
-    std::println("graph written to {} (dot -Tsvg {} -o graph.svg)\n", dot_name, dot_name);
+    std::println("graph written to {} (dot -Tsvg {} -o graph.svg)", dot_name, dot_name);
+    std::println("job threads: {} background + main (--threads N)\n", m_jobs.threads());
 
     WindowSystem::Size fb = m_window.framebuffer_size();
     int fb_w = fb.width;

@@ -24,6 +24,7 @@ TEST_CASE("parse_args: без аргументов конфигурация не
     CHECK(config.max_frames == -1);
     CHECK(config.max_ticks == -1);
     CHECK(config.screenshot.empty());
+    CHECK(config.threads == -1);
 }
 
 TEST_CASE("parse_args: --frames, --ticks, --screenshot") {
@@ -47,4 +48,10 @@ TEST_CASE("parse_args: неизвестные аргументы — игре, �
     CHECK(config.extra_args[0] == "--agents");
     CHECK(config.extra_args[1] == "50000");
     CHECK(config.extra_args[2] == "--quiet");
+}
+
+TEST_CASE("parse_args: --threads") {
+    CHECK(parse({"--threads", "0"}).threads == 0);
+    CHECK(parse({"--threads", "6"}).threads == 6);
+    CHECK(parse({"--threads", "-3"}).threads == 0); // отрицательное — «без фоновых потоков»
 }

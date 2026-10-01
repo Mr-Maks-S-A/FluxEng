@@ -17,6 +17,7 @@
 #include <Core/PlatformEvents.hpp>
 
 #include <EventSystem/EventSystem.hpp>
+#include <JobSystem/JobSystem.hpp>
 #include <MemorySystem/MemorySystem.hpp>
 #include <RendererSystem/RendererSystem.hpp>
 #include <WindowSystem/Window.hpp> // окно, ввод; подключает glad + GLFW
@@ -40,10 +41,12 @@ struct AppConfig {
     int max_ticks = -1;                    ///< Выйти через N тиков; включает lockstep: один тик на кадр,
                                            ///< поэтому прогон детерминирован и не зависит от скорости машины.
     std::string screenshot{};              ///< Сохранить последний кадр в PNG (пусто — не сохранять).
+    int threads = -1;                      ///< Фоновых потоков JobSystem; -1 — по умолчанию (ядра − 1),
+                                           ///< 0 — всё в главном потоке (эталон для сравнения и отладки).
     std::vector<std::string> extra_args{}; ///< Аргументы, которые Core не разобрал (для самой игры), по порядку.
 };
 
-/// @brief Разбирает `--frames N`, `--ticks N` и `--screenshot file.png`; остальное кладёт в `extra_args`.
+/// @brief Разбирает `--frames N`, `--ticks N`, `--threads N` и `--screenshot file.png`; остальное кладёт в `extra_args`.
 [[nodiscard]] AppConfig parse_args(AppConfig config, int argc, char** argv);
 
 /// @brief Состояние мыши за текущий кадр.
@@ -109,6 +112,14 @@ public:
     [[nodiscard]] RendererSystem::Renderer2D& renderer() noexcept { return *m_renderer; }
     [[nodiscard]] RendererSystem::Camera2D& camera() noexcept { return m_camera; }
     [[nodiscard]] WindowSystem::Window& window() noexcept { return m_window; }
+    /**
+     * @brief Планировщик задач для систем игры (JobSystem).
+     *
+     * Число фоновых потоков — AppConfig::threads (`--threads N`). Параллельные системы пишут
+     * результаты в JobSystem::ChunkBuffers и сливают их в порядке кусков — тогда симуляция
+     * одинакова при любом числе потоков, и прогон `--threads 0` служит эталоном.
+     */
+    [[nodiscard]] JobSystem::Scheduler& jobs() noexcept { return m_jobs; }
     [[nodiscard]] const FrameInput& input() const noexcept { return m_input; }
 
     /// @brief Модуль "Platform": производитель KeyEvent и MouseButtonEvent.
@@ -158,6 +169,7 @@ private:
     EventSystem::EventWriter<MouseButtonEvent> m_mouse_out;
 
     FixedStep m_step;
+    JobSystem::Scheduler m_jobs;
     MemorySystem::DoubleArena m_tick_memory = MemorySystem::DoubleArena::reserve(MemorySystem::MiB(256));
     MemorySystem::Arena m_frame_memory = MemorySystem::Arena::reserve(MemorySystem::MiB(64));
 };
