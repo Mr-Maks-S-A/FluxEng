@@ -15,6 +15,7 @@
 #include <EventSystem/Storage/EventBuffer.hpp>
 
 #include <EventSystem/Channel/IChannel.hpp>
+#include <EventSystem/Channel/Channel.hpp>
 #include <EventSystem/Channel/StreamChannel.hpp>
 
 #include <EventSystem/Bus/EventBus.hpp>

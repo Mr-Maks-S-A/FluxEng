@@ -10,7 +10,9 @@ add_executable(RendererSystemTests
     test_camera.cpp
     test_sprite_batch.cpp
     test_animation.cpp
-    test_gl.cpp
+    test_3d.cpp
+    test_text.cpp
+    test_render.cpp
 )
 
 target_link_libraries(RendererSystemTests PRIVATE

@@ -6,6 +6,7 @@
 
 #include <EventSystem/Bus/EventReader.hpp>
 #include <EventSystem/Bus/EventWriter.hpp>
+#include <EventSystem/Channel/Channel.hpp>
 #include <EventSystem/Channel/IChannel.hpp>
 #include <EventSystem/Channel/StreamChannel.hpp>
 #include <EventSystem/Core/Event.hpp>
@@ -17,6 +18,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +26,13 @@
 namespace EventSystem {
 
 class ModuleBuilder;
+
+/// @brief Запись журнала причин: событие, его причина и тип (для дерева «что из чего выросло»).
+struct TraceRecord {
+    EventRef ref{};    ///< Событие.
+    EventRef cause{};  ///< Его причина (нулевая — корень: ввод, таймер, система без причины).
+    EventId event{};   ///< Тип события.
+};
 
 /**
  * @brief Центральная шина событий.
@@ -118,7 +127,7 @@ public:
      */
     template<Event E>
     [[nodiscard]] EventWriter<E> writer() {
-        return EventWriter<E>(stream_channel(schema_of<E>()));
+        return EventWriter<E>(channel_of(schema_of<E>()));
     }
 
     /**
@@ -127,7 +136,7 @@ public:
      */
     template<Event E>
     [[nodiscard]] EventReader<E> reader() const {
-        return EventReader<E>(stream_channel(schema_of<E>()));
+        return EventReader<E>(channel_of(schema_of<E>()));
     }
 
     /**
@@ -153,13 +162,33 @@ public:
     // ================================================================= время
 
     /**
-     * @brief Завершает тик: события, отправленные в этом тике, становятся видимыми,
-     *        события прошлого тика удаляются.
+     * @brief Завершает тик: в каналах домена Domain::Tick отправленное становится видимым
+     *        (по правилам политики), дорожки потоков сливаются, события прошлого тика удаляются.
      */
     void advance_tick();
 
+    /// @brief Завершает кадр: то же для каналов домена Domain::Frame (идёт и на паузе симуляции).
+    void advance_frame();
+
     /// @brief Номер текущего тика (начинается с 0).
     [[nodiscard]] Tick current_tick() const noexcept { return m_tick; }
+    /// @brief Номер текущего кадра (сколько раз вызван advance_frame()).
+    [[nodiscard]] Tick current_frame() const noexcept { return m_frame; }
+
+    // ================================================================= дерево причин (ChannelConfig::trace)
+
+    /// @brief Сколько последних записей хранит журнал причин (по умолчанию 65 536; 0 — не хранить).
+    void set_trace_capacity(std::size_t records);
+    /// @brief Журнал: записи о событиях трассируемых каналов в порядке появления (старые вытесняются).
+    [[nodiscard]] std::vector<TraceRecord> trace_journal() const;
+    /// @brief Цепочка причин от корня до события `ref` включительно (пусто, если события нет в журнале).
+    [[nodiscard]] std::vector<TraceRecord> cause_chain(EventRef ref) const;
+    /// @brief Прямые следствия события `ref`.
+    [[nodiscard]] std::vector<TraceRecord> effects(EventRef ref) const;
+    /// @brief Дерево «событие → следствия → …» текстом, до глубины `depth`.
+    [[nodiscard]] std::string trace_tree(EventRef root, int depth = 8) const;
+    /// @brief «имя@время#номер» для вывода.
+    [[nodiscard]] std::string describe(EventRef ref) const;
 
     /// @brief Удаляет все события во всех каналах (например при загрузке сохранения).
     void clear_all() noexcept;
@@ -183,15 +212,21 @@ private:
 
     enum class Role : unsigned char { Producer, Consumer };
 
-    [[nodiscard]] StreamChannel& stream_channel(const EventSchema& schema);
-    [[nodiscard]] const StreamChannel& stream_channel(const EventSchema& schema) const;
+    [[nodiscard]] Channel& channel_of(const EventSchema& schema);
+    [[nodiscard]] const Channel& channel_of(const EventSchema& schema) const;
+    void advance(Domain domain);
+    void record_trace(const Channel& channel);
     void require_declared(ModuleId module, EventId event, Role role) const;
     void declare_link(ModuleId module, EventId event, Role role);
 
-    std::vector<std::unique_ptr<IChannel>> m_channels;
+    std::vector<std::unique_ptr<Channel>> m_channels;
     std::unordered_map<EventId, std::size_t> m_index;
     ModuleRegistry m_modules;
     Tick m_tick = 0;
+    Tick m_frame = 0;
+    std::vector<TraceRecord> m_journal; ///< Кольцо записей причин.
+    std::size_t m_journal_head = 0;
+    std::size_t m_journal_capacity = 1u << 16;
 };
 
 /**

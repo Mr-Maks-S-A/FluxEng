@@ -9,6 +9,9 @@ add_executable(EventSystemTests
     test_channel.cpp
     test_bus.cpp
     test_modules.cpp
+    test_policies.cpp
+    test_lanes.cpp
+    test_trace.cpp
 )
 
 target_link_libraries(EventSystemTests PRIVATE

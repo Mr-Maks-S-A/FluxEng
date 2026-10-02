@@ -14,6 +14,7 @@
 #include <expected>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -70,6 +71,10 @@ public:
     void set(std::string_view name, const glm::vec3& value) const;
     void set(std::string_view name, const glm::vec4& value) const;
     void set(std::string_view name, const glm::mat4& value) const;
+    /// @brief Массив `uniform vec3 name[N]` (имя без `[0]`).
+    void set_array(std::string_view name, std::span<const glm::vec3> values) const;
+    /// @brief Массив `uniform vec4 name[N]` (имя без `[0]`).
+    void set_array(std::string_view name, std::span<const glm::vec4> values) const;
     /// @}
 
 private:

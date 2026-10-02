@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file Window.hpp
- * @brief Окно с OpenGL-контекстом поверх GLFW: создание, кадр, свойства, ввод, события.
+ * @brief Окно поверх GLFW: создание (с OpenGL-контекстом или без него — для Vulkan), кадр, свойства, ввод, события.
  *
  * @code
  * auto created = WindowSystem::Window::create({.title = "Game", .width = 1280, .height = 720});
@@ -23,6 +23,10 @@
  *
  * Заголовок подключает glad и GLFW: игре нужны коды клавиш `GLFW_KEY_*` и функции OpenGL.
  *
+ * **Графический API.** `WindowConfig::api = ClientApi::OpenGL` (по умолчанию) — окно с контекстом OpenGL,
+ * функции загружены glad. `ClientApi::None` — окно без контекста для Vulkan: поверхность создаёт
+ * create_vulkan_surface(), кадр показывает сам рендер (swap_buffers() ничего не делает).
+ *
  * **ZII.** Созданное по умолчанию окно пусто: все запросы безопасны (размеры 0, `should_close() == true`).
  * Окно можно перемещать: состояние лежит в куче, и обработчики GLFW всегда видят актуальный объект.
  */
@@ -40,6 +44,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace WindowSystem {
 
@@ -49,6 +54,19 @@ struct Size {
     int height = 0; ///< Высота.
     /// @brief Совпадают обе стороны.
     friend bool operator==(Size, Size) noexcept = default;
+};
+
+/// @brief Для какого графического API создаётся окно.
+enum class ClientApi : std::uint8_t {
+    OpenGL, ///< Окно с контекстом OpenGL (gl_major.gl_minor core), функции загружены glad.
+    None,   ///< Без контекста: для Vulkan (поверхность — create_vulkan_surface()).
+};
+
+/// @brief Режим курсора.
+enum class CursorMode : std::uint8_t {
+    Normal,   ///< Обычный курсор.
+    Hidden,   ///< Невидим над окном, но двигается свободно.
+    Captured, ///< Скрыт и захвачен: относительное движение без упора в край (обзор мышью в 3D).
 };
 
 /// @brief Параметры создания окна.
@@ -63,6 +81,7 @@ struct WindowConfig {
     int gl_minor = 3;              ///< Версия OpenGL: младшая.
     int samples = 0;               ///< MSAA; 0 — выключено.
     bool close_on_escape = false;  ///< Закрывать окно по Esc (удобно для примеров; в игре решает она сама).
+    ClientApi api = ClientApi::OpenGL; ///< OpenGL-контекст или окно для Vulkan.
 };
 
 /// @brief События окна. На каждое можно подписать сколько угодно обработчиков.
@@ -76,7 +95,7 @@ struct WindowEvents {
     Listeners<bool> focus;                    ///< true — получили фокус
 };
 
-/// @brief Окно с OpenGL-контекстом.
+/// @brief Окно (с OpenGL-контекстом или для Vulkan).
 class Window {
 public:
     /// @brief Пустое окно (ZII): ничего не открыто, запросы безопасны.
@@ -106,7 +125,7 @@ public:
      */
     void poll_events();
 
-    /// @brief Показывает нарисованный кадр.
+    /// @brief Показывает нарисованный кадр (OpenGL). Для окна без контекста ничего не делает: кадр показывает рендер.
     void swap_buffers();
 
     /// @brief Пользователь или программа попросили закрыть окно.
@@ -142,6 +161,26 @@ public:
     [[nodiscard]] const InputState& input() const noexcept;
     /// @brief Курсор в пикселях framebuffer'а (с учётом HiDPI) — удобно для камеры.
     [[nodiscard]] Vec2d cursor_in_framebuffer() const noexcept;
+
+    /// @brief Режим курсора; при Captured включается «сырое» движение мыши (без ускорения ОС), если поддерживается.
+    void set_cursor_mode(CursorMode mode) noexcept;
+    /// @brief Текущий режим курсора.
+    [[nodiscard]] CursorMode cursor_mode() const noexcept;
+
+    // ------------------------------------------------------------------ графический API
+
+    /// @brief API, для которого создано окно.
+    [[nodiscard]] ClientApi api() const noexcept;
+
+    /// @brief Расширения экземпляра Vulkan, нужные для показа в окна этой платформы (пусто — Vulkan недоступен).
+    [[nodiscard]] static std::vector<std::string> vulkan_instance_extensions();
+
+    /**
+     * @brief Создаёт VkSurfaceKHR для этого окна.
+     * @param instance VkInstance, приведённый к целому (заголовок не требует vulkan.h).
+     * @return VkSurfaceKHR как целое или текст ошибки (окно с OpenGL-контекстом, нет поддержки Vulkan).
+     */
+    [[nodiscard]] std::expected<std::uint64_t, std::string> create_vulkan_surface(std::uintptr_t instance) const;
 
     /// @brief Подписки на события окна.
     [[nodiscard]] WindowEvents& events() noexcept;

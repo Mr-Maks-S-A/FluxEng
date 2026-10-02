@@ -5,6 +5,7 @@
  */
 
 #include <EventSystem/Core/Event.hpp>
+#include <EventSystem/Core/Ids.hpp>
 #include <EventSystem/Core/Schema.hpp>
 #include <EventSystem/Storage/ColumnBuffer.hpp>
 
@@ -77,7 +78,44 @@ public:
     void reserve(std::size_t capacity);
 
     /// @brief Удаляет все события; память сохраняется для переиспользования.
-    void clear() noexcept { m_size = 0; }
+    void clear() noexcept {
+        m_size = 0;
+        m_causes.clear();
+    }
+
+    // ------------------------------------------------------------------ строки и причины
+
+    /**
+     * @brief Дописывает события `[first, first + count)` из `source` (та же схема): по memcpy на колонку.
+     *
+     * Так сливаются дорожки потоков и переносятся отложенные события — SoA остаётся SoA,
+     * каждая колонка копируется одним непрерывным блоком.
+     */
+    void append(const EventBuffer& source, std::size_t first, std::size_t count);
+    /// @brief Заменяет событие `index` событием `source_index` из `source` (слияние Coalesced).
+    void overwrite(std::size_t index, const EventBuffer& source, std::size_t source_index) noexcept;
+    /// @brief Удаляет первые `count` событий, остальные сдвигаются в начало (отложенные события).
+    void erase_front(std::size_t count) noexcept;
+
+    /// @brief Хранить причину каждого события (дерево причин).
+    void set_tracing(bool enabled) {
+        m_tracing = enabled;
+        if (enabled) {
+            m_causes.resize(m_size, 0); // уже записанные события — без причины
+        } else {
+            m_causes.clear();
+        }
+    }
+    /// @brief Хранятся ли причины.
+    [[nodiscard]] bool tracing() const noexcept { return m_tracing; }
+    /// @brief Причина события `index` (нулевая, если трассировка выключена или причины нет).
+    [[nodiscard]] EventRef cause(std::size_t index) const noexcept {
+        return m_tracing && index < m_causes.size() ? EventRef{m_causes[index]} : EventRef{};
+    }
+    /// @brief Задаёт причину последнего записанного события (используется вместе с push).
+    void set_last_cause(EventRef cause) noexcept {
+        if (m_tracing && !m_causes.empty()) m_causes.back() = cause.value;
+    }
 
     // ------------------------------------------------------------------ сырой доступ
 
@@ -157,11 +195,16 @@ private:
     }
 
     void grow();
+    void note_push() {
+        if (m_tracing) m_causes.push_back(0);
+    }
 
     const EventSchema* m_schema;
     std::vector<ColumnBuffer> m_columns;
     std::size_t m_size = 0;
     std::size_t m_capacity = 0;
+    std::vector<std::uint64_t> m_causes; ///< Причины по событиям (только при трассировке).
+    bool m_tracing = false;
 };
 
 // =============================================================================
@@ -186,6 +229,7 @@ void EventBuffer::push(const E& event) {
         }(std::make_index_sequence<event_field_count_v<E>>{});
     }
     ++m_size;
+    note_push();
 }
 
 template<Event E>

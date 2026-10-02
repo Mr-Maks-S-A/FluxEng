@@ -10,8 +10,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FluxModule.cmake")
 # превращает ввод в события модуля "Platform" и даёт отладку (оверлей шины, F1, граф).
 # Игра реализует Core::Game и запускается через Core::run<G>().
 #
-# Зависимости: MemorySystem (память тика и кадра), JobSystem (потоки для систем игры), EventSystem, RendererSystem, WindowSystem,
-# GLFW (коды клавиш), stb (скриншот).
+# Зависимости: MemorySystem (память тика и кадра), JobSystem (потоки для систем игры), EventSystem,
+# RendererSystem (2D, 3D, шрифт интерфейса, скриншот в PNG), WindowSystem, GLFW (коды клавиш).
 # ==============================================================================
 flux_module_option(CORE_BUILD_TESTS "Собирать тесты Core")
 
@@ -21,7 +21,6 @@ flux_module(EventSystem)
 flux_module(WindowSystem)
 flux_module(RendererSystem)
 flux_external(glfw)
-flux_external(stb)
 
 add_library(Core STATIC
     src/code/App.cpp
@@ -36,7 +35,6 @@ target_include_directories(Core PUBLIC
 target_compile_features(Core PUBLIC cxx_std_23)
 target_link_libraries(Core
     PUBLIC  engine::MemorySystem engine::JobSystem engine::EventSystem engine::RendererSystem engine::WindowSystem glfw
-    PRIVATE stb
 )
 
 if(MSVC)

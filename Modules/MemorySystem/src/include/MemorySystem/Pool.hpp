@@ -42,9 +42,10 @@ public:
     Pool() noexcept = default;
 
     /// @brief Пул не более чем на `max_items` одновременно живых объектов.
-    [[nodiscard]] static Pool reserve(std::size_t max_items, std::size_t commit_step = KiB(64)) noexcept {
+    [[nodiscard]] static Pool reserve(std::size_t max_items, std::size_t commit_step = KiB(64),
+                                      MemoryTag tag = MemoryTag::Untagged) noexcept {
         Pool pool;
-        pool.m_arena = Arena::reserve(std::max<std::size_t>(max_items, 1) * block_size, commit_step);
+        pool.m_arena = Arena::reserve(std::max<std::size_t>(max_items, 1) * block_size, commit_step, tag);
         pool.m_capacity = max_items;
         return pool;
     }

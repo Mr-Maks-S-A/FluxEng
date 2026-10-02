@@ -3,11 +3,11 @@
  * Окно движка (WindowSystem) + Renderer2D: тайловый фон, анимированные существа,
  * линии и контуры, камера с панорамой и зумом. ESC — выход.
  *
- * Аргумент `--frames N` закрывает окно через N кадров (для автоматического запуска).
+ * Аргументы: `--frames N` — закрыть окно через N кадров (для автоматического запуска),
+ * `--backend gl|vulkan` — графический API.
  */
 
-#include <RendererSystem/RendererSystem.hpp>
-#include <WindowSystem/Window.hpp>
+#include "ExampleContext.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -53,15 +53,15 @@ int frames_limit(int argc, char** argv) {
 int main(int argc, char** argv) {
     const int max_frames = frames_limit(argc, argv);
 
-    auto opened = WindowSystem::Window::create(
-        {.title = "FluxEng RendererSystem — sprites", .width = 1280, .height = 720, .close_on_escape = true});
+    auto opened = Example::open("FluxEng RendererSystem — sprites", 1280, 720, true, Example::backend_from_args(argc, argv));
     if (!opened) {
-        std::println(stderr, "cannot create window: {}", opened.error());
+        std::println(stderr, "cannot create window or device: {}", opened.error());
         return 1;
     }
-    WindowSystem::Window& window = *opened;
+    WindowSystem::Window& window = opened->window;
+    RHI::Device& device = *opened->device;
 
-    auto created = Renderer2D::create();
+    auto created = Renderer2D::create(device);
     if (!created) {
         std::println(stderr, "{}", created.error());
         return 1;
@@ -113,7 +113,10 @@ int main(int argc, char** argv) {
         camera.viewport = {static_cast<float>(width), static_cast<float>(height)};
 
         // --- отрисовка
-        renderer.set_viewport(width, height);
+        if (!device.begin_frame(width, height)) {
+            device.end_frame();
+            continue; // окно свёрнуто
+        }
         renderer.clear(Color::from_rgba(0x1B1B1FFF));
         renderer.begin(camera);
 
@@ -136,6 +139,7 @@ int main(int argc, char** argv) {
         renderer.draw_line(creatures[0].position, creatures[1].position, 2.0f, Colors::red.with_alpha(160), 10);
 
         const RenderStats stats = renderer.end();
+        device.end_frame();
         window.swap_buffers();
 
         stats_timer += dt;

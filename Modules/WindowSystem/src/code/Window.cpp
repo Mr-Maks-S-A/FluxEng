@@ -1,3 +1,6 @@
+#if defined(FLUX_WINDOW_VULKAN)
+#    include <vulkan/vulkan.h> // до GLFW: тогда glfw3.h объявит glfwCreateWindowSurface
+#endif
 #include <WindowSystem/Window.hpp>
 
 #include <cstdlib>
@@ -12,6 +15,8 @@ struct Window::Impl {
     std::string title;
     bool vsync = true;
     bool close_on_escape = false;
+    ClientApi api = ClientApi::OpenGL;
+    CursorMode cursor_mode = CursorMode::Normal;
     InputState input;
     WindowEvents events;
 
@@ -108,30 +113,38 @@ std::expected<Window, std::string> Window::create(const WindowConfig& config) {
         return std::unexpected(g_last_error.empty() ? std::string("cannot initialize GLFW") : g_last_error);
     }
 
+    const bool opengl = config.api == ClientApi::OpenGL;
     glfwDefaultWindowHints();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, config.gl_major);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, config.gl_minor);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    if (opengl) {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, config.gl_major);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, config.gl_minor);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #if defined(__APPLE__)
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
+    } else {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // Vulkan: без контекста OpenGL
+    }
     glfwWindowHint(GLFW_VISIBLE, config.visible ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, config.resizable ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_SAMPLES, config.samples);
 
     GLFWwindow* handle = glfwCreateWindow(config.width, config.height, config.title.c_str(), nullptr, nullptr);
     if (handle == nullptr) {
-        std::string error = std::format("cannot create a window with OpenGL {}.{} core: {}", config.gl_major,
-                                        config.gl_minor, g_last_error.empty() ? "unknown reason" : g_last_error);
+        std::string error = opengl ? std::format("cannot create a window with OpenGL {}.{} core: {}", config.gl_major,
+                                                 config.gl_minor, g_last_error.empty() ? "unknown reason" : g_last_error)
+                                   : std::format("cannot create a window: {}", g_last_error.empty() ? "unknown reason" : g_last_error);
         release_platform(); // счётчик возвращается, даже если окно не создалось
         return std::unexpected(std::move(error));
     }
 
-    glfwMakeContextCurrent(handle);
-    if (gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)) == 0) {
-        glfwDestroyWindow(handle);
-        release_platform();
-        return std::unexpected(std::string("cannot load OpenGL functions (glad)"));
+    if (opengl) {
+        glfwMakeContextCurrent(handle);
+        if (gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)) == 0) {
+            glfwDestroyWindow(handle);
+            release_platform();
+            return std::unexpected(std::string("cannot load OpenGL functions (glad)"));
+        }
     }
 
     Window window;
@@ -140,6 +153,7 @@ std::expected<Window, std::string> Window::create(const WindowConfig& config) {
     impl.handle = handle;
     impl.title = config.title;
     impl.close_on_escape = config.close_on_escape;
+    impl.api = config.api;
     glfwSetWindowUserPointer(handle, &impl);
     install_callbacks(handle);
     window.set_vsync(config.vsync);
@@ -177,7 +191,7 @@ void Window::poll_events() {
 }
 
 void Window::swap_buffers() {
-    if (m_impl && m_impl->handle != nullptr) glfwSwapBuffers(m_impl->handle);
+    if (m_impl && m_impl->handle != nullptr && m_impl->api == ClientApi::OpenGL) glfwSwapBuffers(m_impl->handle);
 }
 
 bool Window::should_close() const noexcept {
@@ -220,11 +234,12 @@ float Window::content_scale() const noexcept {
 
 void Window::set_vsync(bool enabled) noexcept {
     if (!m_impl || m_impl->handle == nullptr) return;
+    m_impl->vsync = enabled;
+    if (m_impl->api != ClientApi::OpenGL) return; // у Vulkan vsync — режим показа swapchain'а
     GLFWwindow* previous = glfwGetCurrentContext();
     glfwMakeContextCurrent(m_impl->handle);
     glfwSwapInterval(enabled ? 1 : 0);
     glfwMakeContextCurrent(previous);
-    m_impl->vsync = enabled;
 }
 
 bool Window::vsync() const noexcept { return m_impl && m_impl->vsync; }
@@ -266,6 +281,42 @@ void Window::inject_char(std::uint32_t codepoint) {
 }
 
 GLFWwindow* Window::native_handle() const noexcept { return m_impl ? m_impl->handle : nullptr; }
+
+void Window::set_cursor_mode(CursorMode mode) noexcept {
+    if (!m_impl || m_impl->handle == nullptr) return;
+    m_impl->cursor_mode = mode;
+    const int value = mode == CursorMode::Captured ? GLFW_CURSOR_DISABLED : mode == CursorMode::Hidden ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL;
+    glfwSetInputMode(m_impl->handle, GLFW_CURSOR, value);
+    if (glfwRawMouseMotionSupported() == GLFW_TRUE) {
+        glfwSetInputMode(m_impl->handle, GLFW_RAW_MOUSE_MOTION, mode == CursorMode::Captured ? GLFW_TRUE : GLFW_FALSE);
+    }
+}
+
+CursorMode Window::cursor_mode() const noexcept { return m_impl ? m_impl->cursor_mode : CursorMode::Normal; }
+
+ClientApi Window::api() const noexcept { return m_impl ? m_impl->api : ClientApi::OpenGL; }
+
+std::vector<std::string> Window::vulkan_instance_extensions() {
+    std::vector<std::string> out;
+    if (g_open_windows == 0 || glfwVulkanSupported() != GLFW_TRUE) return out; // GLFW ещё не инициализирован или нет загрузчика
+    std::uint32_t count = 0;
+    const char** names = glfwGetRequiredInstanceExtensions(&count);
+    for (std::uint32_t i = 0; names != nullptr && i < count; ++i) out.emplace_back(names[i]);
+    return out;
+}
+
+std::expected<std::uint64_t, std::string> Window::create_vulkan_surface([[maybe_unused]] std::uintptr_t instance) const {
+    if (!m_impl || m_impl->handle == nullptr) return std::unexpected(std::string("window is not created"));
+    if (m_impl->api != ClientApi::None) return std::unexpected(std::string("window has an OpenGL context; create it with ClientApi::None"));
+#if defined(FLUX_WINDOW_VULKAN)
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    const VkResult result = glfwCreateWindowSurface(reinterpret_cast<VkInstance>(instance), m_impl->handle, nullptr, &surface);
+    if (result != VK_SUCCESS) return std::unexpected(std::format("glfwCreateWindowSurface failed: VkResult {}", static_cast<int>(result)));
+    return (std::uint64_t)surface; // на 64 бит — указатель, на 32 — uint64_t: приведение в стиле C подходит обоим
+#else
+    return std::unexpected(std::string("WindowSystem was built without Vulkan headers"));
+#endif
+}
 
 int Window::open_windows() noexcept { return g_open_windows; }
 

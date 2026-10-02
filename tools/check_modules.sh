@@ -24,7 +24,7 @@ for module in "${modules[@]}"; do
     if cmake -S "${root}/Modules/${module}" -B "${dir}" -DCMAKE_BUILD_TYPE=RelWithDebInfo "$@" > "${dir}.configure.log" 2>&1 \
         && cmake --build "${dir}" --parallel > "${dir}.build.log" 2>&1 \
         && ctest --test-dir "${dir}" --output-on-failure > "${dir}.test.log" 2>&1; then
-        echo "     ok ($(grep -Eo '[0-9]+ tests? failed out of [0-9]+' "${dir}.test.log" || echo 'no tests'))"
+        echo "     ok ($(grep -Eo '[0-9]+% tests passed(, [0-9]+ tests? failed)? out of [0-9]+' "${dir}.test.log" || echo 'no tests'))"
     else
         echo "     FAILED — см. ${dir}.*.log"
         failed+=("${module}")

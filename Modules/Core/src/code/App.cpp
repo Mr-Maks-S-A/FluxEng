@@ -9,17 +9,6 @@
 #include <stdexcept>
 #include <string_view>
 
-#if defined(__GNUC__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wmissing-field-initializers"
-#endif
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
-#include <stb_image_write.h>
-#if defined(__GNUC__)
-#    pragma GCC diagnostic pop
-#endif
-
 namespace Core {
 
 using namespace RendererSystem;
@@ -37,6 +26,12 @@ AppConfig parse_args(AppConfig config, int argc, char** argv) {
             config.threads = std::max(0, std::atoi(argv[++i]));
         } else if (arg == "--screenshot" && has_value) {
             config.screenshot = argv[++i];
+        } else if (arg == "--backend" && has_value) {
+            const auto backend = parse_backend(argv[++i]);
+            if (!backend) throw std::invalid_argument(std::format("unknown backend '{}' (use gl or vulkan)", argv[i]));
+            config.backend = *backend;
+        } else if (arg == "--validation") {
+            config.validation = true;
         } else {
             config.extra_args.emplace_back(arg); // игре: например, --agents 100000
         }
@@ -47,11 +42,29 @@ AppConfig parse_args(AppConfig config, int argc, char** argv) {
 namespace {
 
 WindowSystem::Window open_window(const AppConfig& config) {
-    auto window = WindowSystem::Window::create({.title = config.title, .width = config.width, .height = config.height});
+    const bool vulkan = config.backend == Backend::Vulkan;
+    auto window = WindowSystem::Window::create(
+        {.title = std::format("{} [{}]", config.title, to_string(config.backend)), .width = config.width, .height = config.height,
+         .visible = config.visible,
+         .vsync = config.visible, // скрытому окну незачем ждать монитор
+         .api = vulkan ? WindowSystem::ClientApi::None : WindowSystem::ClientApi::OpenGL});
     if (!window) {
         throw std::runtime_error(window.error());
     }
     return std::move(*window);
+}
+
+std::unique_ptr<RHI::Device> open_device(const AppConfig& config, const WindowSystem::Window& window) {
+    RHI::DeviceConfig device_config{.backend = config.backend, .validation = config.validation, .vsync = config.visible};
+    if (config.backend == Backend::Vulkan && config.visible) { // скрытому окну swapchain не нужен: App рисует в свою цель
+        device_config.instance_extensions = WindowSystem::Window::vulkan_instance_extensions();
+        device_config.create_surface = [&window](std::uintptr_t instance) { return window.create_vulkan_surface(instance); };
+    }
+    auto device = RHI::Device::create(device_config);
+    if (!device) {
+        throw std::runtime_error(std::format("{} device: {}", to_string(config.backend), device.error()));
+    }
+    return std::move(*device);
 }
 
 } // namespace
@@ -62,11 +75,19 @@ App::App(AppConfig config)
           .threads = m_config.threads >= 0 ? static_cast<unsigned>(m_config.threads) : JobSystem::default_threads()}) {
     m_step.ticks_per_second = m_config.ticks_per_second;
     m_step.lockstep = m_config.max_ticks >= 0;
-    auto renderer = Renderer2D::create();
+    m_device = open_device(m_config, m_window);
+    std::println("render: {} — {} ({})", to_string(m_device->backend()), m_device->info().device_name, m_device->info().api_version);
+    auto renderer = Renderer2D::create(*m_device);
     if (!renderer) {
         throw std::runtime_error(renderer.error());
     }
     m_renderer.emplace(std::move(*renderer));
+    auto renderer3d = Renderer3D::create(*m_device);
+    if (!renderer3d) {
+        throw std::runtime_error(renderer3d.error());
+    }
+    m_renderer3d.emplace(std::move(*renderer3d));
+    load_ui_fonts();
 
     // Модуль платформы: мост «колбэки окна → события шины».
     m_platform = m_bus.declare_module("Platform")
@@ -76,6 +97,28 @@ App::App(AppConfig config)
     m_mouse_out = m_bus.writer<MouseButtonEvent>(m_platform);
 
     m_window.events().key.subscribe([this](int key, int action) { on_key(key, action); });
+    // Кнопки мыши — подпиской, как и клавиши: каждое нажатие и отпускание попадает в шину по порядку,
+    // включая внедрённые (Window::inject_mouse_button) между кадрами — флаги кадра InputState их бы потеряли.
+    m_window.events().mouse_button.subscribe([this](int button, int action) {
+        const WindowSystem::Vec2d cursor = m_window.cursor_in_framebuffer();
+        const glm::vec2 world = m_camera.screen_to_world({static_cast<float>(cursor.x), static_cast<float>(cursor.y)});
+        m_mouse_out.emit(MouseButtonEvent{.button = button, .action = action, .world_x = world.x, .world_y = world.y});
+    });
+}
+
+void App::load_ui_fonts() {
+    const FontConfig config{.pixel_height = m_config.ui_font_size};
+    auto regular = Font::load_system(config);
+    if (regular) {
+        std::println("ui font: {} ({} glyphs, atlas {}x{})", regular->source(), regular->glyph_count(),
+                     regular->atlas().width(), regular->atlas().height());
+        m_ui_font = m_renderer->add_font(std::move(*regular));
+    } else {
+        std::println("ui font: {} — using builtin ASCII font", regular.error());
+        m_ui_font = m_renderer->add_font(Font::builtin(std::max(1, static_cast<int>(m_config.ui_font_size / 12.0f))));
+    }
+    auto bold = Font::load_system(config, true);
+    m_ui_font_bold = bold ? m_renderer->add_font(std::move(*bold)) : m_ui_font;
 }
 
 void App::on_key(int key, int action) {
@@ -102,19 +145,21 @@ void App::poll_input(float frame_seconds) {
     const WindowSystem::InputState& input = m_window.input();
 
     // Панорама камерой — в домене кадра, работает и на паузе.
-    glm::vec2 pan{0.0f};
-    if (input.down(GLFW_KEY_A) || input.down(GLFW_KEY_LEFT)) pan.x -= 1;
-    if (input.down(GLFW_KEY_D) || input.down(GLFW_KEY_RIGHT)) pan.x += 1;
-    if (input.down(GLFW_KEY_W) || input.down(GLFW_KEY_UP)) pan.y -= 1;
-    if (input.down(GLFW_KEY_S) || input.down(GLFW_KEY_DOWN)) pan.y += 1;
-    m_camera.position += pan * (500.0f * frame_seconds / m_camera.zoom);
+    if (m_config.camera_controls) {
+        glm::vec2 pan{0.0f};
+        if (input.down(GLFW_KEY_A) || input.down(GLFW_KEY_LEFT)) pan.x -= 1;
+        if (input.down(GLFW_KEY_D) || input.down(GLFW_KEY_RIGHT)) pan.x += 1;
+        if (input.down(GLFW_KEY_W) || input.down(GLFW_KEY_UP)) pan.y -= 1;
+        if (input.down(GLFW_KEY_S) || input.down(GLFW_KEY_DOWN)) pan.y += 1;
+        m_camera.position += pan * (500.0f * frame_seconds / m_camera.zoom);
+    }
 
     // Курсор приходит в координатах окна, камера — в пикселях framebuffer'а (HiDPI): пересчёт в WindowSystem.
     const WindowSystem::Vec2d cursor = m_window.cursor_in_framebuffer();
     m_input.mouse_screen = {static_cast<float>(cursor.x), static_cast<float>(cursor.y)};
 
     // Зум к курсору: точка мира под курсором остаётся на месте.
-    if (const auto scroll = static_cast<float>(input.scroll().y); scroll != 0.0f) {
+    if (const auto scroll = static_cast<float>(input.scroll().y); scroll != 0.0f && m_config.camera_controls) {
         const glm::vec2 before = m_camera.screen_to_world(m_input.mouse_screen);
         m_camera.zoom = std::clamp(m_camera.zoom * std::pow(1.15f, scroll), 0.1f, 20.0f);
         m_camera.position += before - m_camera.screen_to_world(m_input.mouse_screen);
@@ -123,18 +168,8 @@ void App::poll_input(float frame_seconds) {
 
     constexpr int buttons[3] = {GLFW_MOUSE_BUTTON_LEFT, GLFW_MOUSE_BUTTON_RIGHT, GLFW_MOUSE_BUTTON_MIDDLE};
     for (std::size_t i = 0; i < 3; ++i) {
-        const int button = buttons[i];
-        m_input.down[i] = input.mouse_down(button);
-        m_input.pressed[i] = input.mouse_pressed(button);
-        // Нажатие и отпускание внутри одного кадра дают оба события, по порядку.
-        if (input.mouse_pressed(button)) {
-            m_mouse_out.emit(MouseButtonEvent{.button = button, .action = GLFW_PRESS,
-                                              .world_x = m_input.mouse_world.x, .world_y = m_input.mouse_world.y});
-        }
-        if (input.mouse_released(button)) {
-            m_mouse_out.emit(MouseButtonEvent{.button = button, .action = GLFW_RELEASE,
-                                              .world_x = m_input.mouse_world.x, .world_y = m_input.mouse_world.y});
-        }
+        m_input.down[i] = input.mouse_down(buttons[i]);
+        m_input.pressed[i] = input.mouse_pressed(buttons[i]);
     }
 }
 
@@ -175,6 +210,9 @@ int App::run(Game& game) {
         fb_h = fb.height;
         m_camera.viewport = {static_cast<float>(std::max(fb_w, 1)), static_cast<float>(std::max(fb_h, 1))};
         poll_input(static_cast<float>(frame_dt));
+        const bool drawable = m_device->begin_frame(fb_w, fb_h); // до Game::frame: игра может рисовать в текстуры
+        game.frame(*this, static_cast<float>(frame_dt));
+        m_bus.advance_frame(); // каналы домена Frame (интерфейс, ввод): живут и на паузе, когда тиков нет
 
         // --- симуляция
         for (int steps = m_step.advance(frame_dt); steps > 0; --steps) {
@@ -187,22 +225,26 @@ int App::run(Game& game) {
                                 (m_config.max_ticks >= 0 && m_bus.current_tick() >= static_cast<es::Tick>(m_config.max_ticks));
 
         // --- отрисовка
-        Renderer2D& r = *m_renderer;
-        r.set_viewport(fb_w, fb_h);
-        r.clear(Color::from_rgba(0x15151AFF));
-        r.begin(m_camera);
-        game.render(*this, r);
-        r.end();
+        if (drawable) {
+            Renderer2D& r = *m_renderer;
+            bind_screen(fb_w, fb_h); // экран; Game::frame мог рисовать в текстуры
+            m_renderer3d->clear(Color::from_rgba(m_config.clear_rgba));
+            game.render_3d(*this, *m_renderer3d);
+            r.begin(m_camera);
+            game.render(*this, r);
+            r.end();
 
-        r.begin(Camera2D{.position = m_camera.viewport * 0.5f, .viewport = m_camera.viewport});
-        game.render_overlay(*this, r);
-        draw_bus_overlay();
-        r.end();
+            r.begin(Camera2D{.position = m_camera.viewport * 0.5f, .viewport = m_camera.viewport});
+            game.render_overlay(*this, r);
+            draw_bus_overlay();
+            r.end();
 
-        if (!m_config.screenshot.empty() && last_frame) {
-            save_screenshot(fb_w, fb_h);
+            if (!m_config.screenshot.empty() && last_frame) {
+                save_screenshot(fb_w, fb_h);
+            }
         }
-        m_window.swap_buffers();
+        m_device->end_frame();
+        m_window.swap_buffers(); // OpenGL; у окна для Vulkan ничего не делает
 
         title_timer += frame_dt;
         ++title_frames;
@@ -216,6 +258,7 @@ int App::run(Game& game) {
         }
     }
 
+    m_device->wait_idle(); // ресурсы игры можно освобождать: GPU их больше не читает
     game.shutdown(*this);
     std::println("\n===== {} : finished at tick {} =====", m_config.title, m_bus.current_tick());
     print_event_report();
@@ -255,23 +298,34 @@ void App::draw_bus_overlay() {
     }
 }
 
-void App::save_screenshot(int width, int height) const {
-    // В RendererSystem нет чтения окна (только Framebuffer::read_pixels), поэтому glReadPixels напрямую.
-    Image image(width, height);
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glReadBuffer(GL_BACK);
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, image.pixels().data());
-    image.flip_vertically();
-    if (stbi_write_png(m_config.screenshot.c_str(), width, height, 4, image.pixels().data(), width * 4) != 0) {
+void App::bind_screen(int width, int height) {
+    if (m_device->info().presents) {
+        m_device->bind_target({});
+        return;
+    }
+    // Устройство без окна: «экран» — своя цель размером с framebuffer окна.
+    if (!m_offscreen || m_offscreen->width() != width || m_offscreen->height() != height) {
+        auto target = RenderTarget::create(*m_device, std::max(width, 1), std::max(height, 1), {.depth = true});
+        if (!target) throw std::runtime_error(target.error());
+        m_offscreen.emplace(std::move(*target));
+    }
+    m_offscreen->bind();
+}
+
+void App::save_screenshot(int /*width*/, int /*height*/) const {
+    const Image image = m_offscreen ? m_offscreen->read_pixels() : m_device->read_screen();
+    if (const auto saved = image.save_png(m_config.screenshot); saved) {
         std::println("screenshot saved to {}", m_config.screenshot);
+    } else {
+        std::println(stderr, "screenshot: {}", saved.error());
     }
 }
 
 void App::update_title(Game& game, double fps) {
     const std::string title =
         std::format("{} | tick {} | {} | {:.0f} fps | {} draw calls | {}", m_config.title, m_bus.current_tick(),
-                    m_step.paused ? "PAUSED" : std::format("x{}", m_step.speed), fps, m_renderer->last_stats().draw_calls,
-                    game.status());
+                    m_step.paused ? "PAUSED" : std::format("x{}", m_step.speed), fps,
+                    m_renderer->last_stats().draw_calls + m_renderer3d->last_stats().draws, game.status());
     m_window.set_title(title);
 }
 
@@ -296,6 +350,7 @@ void App::print_event_report() const {
         std::println("warning: nobody produces '{}'", graph.find_event(id)->name);
     }
 
+    std::println("memory by tag (MemorySystem::memory_report):\n{}", MemorySystem::memory_report());
     std::println("{:<28} {:>12} {:>10} {:>10} {:>12}", "channel", "emitted", "peak/tick", "dropped", "memory");
     for (std::size_t i = 0; i < m_bus.channel_count(); ++i) {
         const es::IChannel& channel = m_bus.channel_at(i);

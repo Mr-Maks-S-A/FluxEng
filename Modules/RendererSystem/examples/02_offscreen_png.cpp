@@ -6,20 +6,7 @@
  * Результат: `renderer_offscreen.png` в текущем каталоге (путь можно передать аргументом).
  */
 
-#include <RendererSystem/RendererSystem.hpp>
-#include <WindowSystem/Window.hpp>
-
-#if defined(__GNUC__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wconversion"
-#    pragma GCC diagnostic ignored "-Wsign-conversion"
-#endif
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
-#include <stb_image_write.h>
-#if defined(__GNUC__)
-#    pragma GCC diagnostic pop
-#endif
+#include "ExampleContext.hpp"
 
 #include <numbers>
 #include <print>
@@ -28,17 +15,18 @@
 using namespace RendererSystem;
 
 int main(int argc, char** argv) {
-    const std::string output = argc > 1 ? argv[1] : "renderer_offscreen.png";
+    const std::string output = argc > 1 && argv[1][0] != '-' ? argv[1] : "renderer_offscreen.png";
 
-    // Окно нужно только ради OpenGL-контекста, поэтому оно скрыто.
-    auto window = WindowSystem::Window::create({.title = "offscreen", .width = 16, .height = 16, .visible = false});
-    if (!window) {
-        std::println(stderr, "cannot create an OpenGL context: {}", window.error());
+    // Окно нужно только ради контекста OpenGL (Vulkan обходится без окна), поэтому оно скрыто.
+    auto context = Example::open("offscreen", 16, 16, false, Example::backend_from_args(argc, argv));
+    if (!context) {
+        std::println(stderr, "cannot create a device: {}", context.error());
         return 1;
     }
+    RHI::Device& device = *context->device;
 
-    auto renderer = Renderer2D::create();
-    auto target = GL::Framebuffer::create(256, 256);
+    auto renderer = Renderer2D::create(device);
+    auto target = RenderTarget::create(device, 256, 256);
     if (!renderer || !target) {
         std::println(stderr, "{}", !renderer ? renderer.error() : target.error());
         return 1;
@@ -49,6 +37,7 @@ int main(int argc, char** argv) {
     // Камера: мир [0, 256) × [0, 256), пиксель в пиксель.
     const Camera2D camera{.position = {128.0f, 128.0f}, .viewport = {256.0f, 256.0f}};
 
+    device.begin_frame(256, 256);
     target->bind();
     renderer->clear(Color::from_rgba(0x202028FF));
     renderer->begin(camera);
@@ -58,12 +47,11 @@ int main(int argc, char** argv) {
     renderer->draw_rect({{8.0f, 8.0f}, {240.0f, 240.0f}}, 3.0f, Colors::yellow, 2);
     renderer->draw_line({16.0f, 240.0f}, {240.0f, 16.0f}, 2.0f, Colors::green, 2);
     const RenderStats stats = renderer->end();
-    GL::Framebuffer::bind_default();
+    device.end_frame();
 
     const Image pixels = target->read_pixels();
-    if (stbi_write_png(output.c_str(), pixels.width(), pixels.height(), 4, pixels.pixels().data(),
-                       pixels.width() * 4) == 0) {
-        std::println(stderr, "cannot write '{}'", output);
+    if (const auto saved = pixels.save_png(output); !saved) {
+        std::println(stderr, "{}", saved.error());
         return 1;
     }
     std::println("saved {} ({} quads, {} draw calls)", output, stats.quads, stats.draw_calls);

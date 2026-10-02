@@ -44,7 +44,7 @@ add_library(EventSystem STATIC
     src/code/EventGraph.cpp
     src/code/ModuleRegistry.cpp
     src/code/Schema.cpp
-    src/code/StreamChannel.cpp
+    src/code/Channel.cpp
 )
 add_library(engine::EventSystem ALIAS EventSystem)
 

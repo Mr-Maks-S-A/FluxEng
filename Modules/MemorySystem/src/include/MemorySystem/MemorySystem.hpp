@@ -17,4 +17,5 @@
 #include <MemorySystem/ArenaResource.hpp>
 #include <MemorySystem/Core.hpp>
 #include <MemorySystem/Pool.hpp>
+#include <MemorySystem/Tags.hpp>
 #include <MemorySystem/VirtualMemory.hpp>

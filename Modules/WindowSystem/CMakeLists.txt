@@ -42,6 +42,14 @@ target_link_libraries(WindowSystem
     PRIVATE $<BUILD_INTERFACE:WindowSystemOptions>
 )
 
+# Vulkan (необязательно): только заголовки — glfwCreateWindowSurface сама находит загрузчик Vulkan.
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND)
+    target_compile_definitions(WindowSystem PRIVATE FLUX_WINDOW_VULKAN=1)
+    target_link_libraries(WindowSystem PRIVATE Vulkan::Headers)
+    message(STATUS "WindowSystem: Vulkan headers found — create_vulkan_surface() enabled")
+endif()
+
 if(WINDOWSYSTEM_BUILD_TESTS)
     enable_testing()
     flux_external(doctest)

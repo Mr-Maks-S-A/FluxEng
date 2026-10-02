@@ -24,6 +24,11 @@ public:
     /// @brief `true`, если OpenGL 3.3 доступен и контекст текущий.
     [[nodiscard]] bool available() const noexcept { return m_available; }
 
+    /// @brief Снова сделать контекст текущим (если между тестами его сменили).
+    void make_current() const noexcept {
+        if (m_window != nullptr) glfwMakeContextCurrent(m_window);
+    }
+
     GlTestContext(const GlTestContext&) = delete;
     GlTestContext& operator=(const GlTestContext&) = delete;
 

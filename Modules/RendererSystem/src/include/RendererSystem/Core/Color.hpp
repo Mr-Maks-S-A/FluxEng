@@ -55,6 +55,21 @@ struct Color {
         return Color{mul(r, other.r), mul(g, other.g), mul(b, other.b), mul(a, other.a)};
     }
 
+    /// @brief Линейная смесь: `t = 0` — `a`, `t = 1` — `b` (t обрезается до 0…1).
+    [[nodiscard]] static constexpr Color lerp(Color a, Color b, float t) noexcept {
+        const float k = std::clamp(t, 0.0f, 1.0f);
+        const auto mix = [k](std::uint8_t x, std::uint8_t y) {
+            return static_cast<std::uint8_t>(static_cast<float>(x) + (static_cast<float>(y) - static_cast<float>(x)) * k + 0.5f);
+        };
+        return Color{mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a)};
+    }
+
+    /// @brief Тот же цвет, умноженный по яркости (альфа не меняется), с насыщением на 255.
+    [[nodiscard]] constexpr Color scaled(float factor) const noexcept {
+        const auto mul_f = [factor](std::uint8_t x) { return to_byte(static_cast<float>(x) / 255.0f * factor); };
+        return Color{mul_f(r), mul_f(g), mul_f(b), a};
+    }
+
     constexpr bool operator==(const Color&) const noexcept = default;
 
 private:

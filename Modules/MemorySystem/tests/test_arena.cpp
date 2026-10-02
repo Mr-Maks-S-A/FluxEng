@@ -170,3 +170,37 @@ TEST_CASE("ArenaResource: исчерпание арены — std::bad_alloc") {
 }
 
 }
+
+TEST_SUITE("MemoryTag") {
+    TEST_CASE("committed memory is counted per tag, with peak, and released with the arena") {
+        using namespace MemorySystem;
+        const TagStats before = tag_stats(MemoryTag::Renderer);
+        {
+            Arena arena = Arena::reserve(MiB(4), KiB(64), MemoryTag::Renderer);
+            CHECK(arena.tag() == MemoryTag::Renderer);
+            CHECK(tag_stats(MemoryTag::Renderer).regions == before.regions + 1);
+            (void)arena.push(KiB(200));
+            const TagStats grown = tag_stats(MemoryTag::Renderer);
+            CHECK(grown.committed >= before.committed + KiB(200));
+            CHECK(grown.peak >= grown.committed);
+            Arena moved = std::move(arena); // перемещение не считается дважды
+            CHECK(tag_stats(MemoryTag::Renderer).committed == grown.committed);
+            moved.reset();
+            moved.shrink();
+            CHECK(tag_stats(MemoryTag::Renderer).committed < grown.committed);
+        }
+        const TagStats after = tag_stats(MemoryTag::Renderer);
+        CHECK(after.committed == before.committed);
+        CHECK(after.regions == before.regions);
+        CHECK(after.peak >= before.committed + KiB(200));
+        CHECK(memory_report().find("renderer") != std::string::npos);
+    }
+
+    TEST_CASE("arenas over external buffers are not tracked") {
+        using namespace MemorySystem;
+        std::array<std::byte, 256> buffer{};
+        const TagStats before = tag_stats(MemoryTag::Untagged);
+        Arena arena = Arena::over(buffer);
+        CHECK(tag_stats(MemoryTag::Untagged).regions == before.regions);
+    }
+}

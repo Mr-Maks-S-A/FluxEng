@@ -24,6 +24,29 @@ namespace EventSystem {
 using Tick = std::uint64_t;
 
 /**
+ * @brief Ссылка на конкретное событие: канал, момент, когда оно стало видно, и номер в этом моменте.
+ *
+ * Нужна дереву причин (ChannelConfig::trace): событие-следствие хранит ссылку на событие-причину.
+ * Вычисляется из положения события, поэтому одинакова при любом числе потоков (никаких счётчиков).
+ * Нулевая ссылка — «причины нет» (ZII).
+ */
+struct EventRef {
+    std::uint64_t value = 0; ///< (время + 1) << 32 | канал << 20 | номер.
+
+    /// @brief Ссылка на событие `index` канала `channel`, видимое в момент `time` (тик или кадр домена канала).
+    [[nodiscard]] static constexpr EventRef make(Tick time, std::uint32_t channel, std::uint32_t index) noexcept {
+        return EventRef{((time + 1) << 32) | (std::uint64_t{channel & 0xFFFu} << 20) | (index & 0xFFFFFu)};
+    }
+    [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
+    [[nodiscard]] constexpr Tick time() const noexcept { return (value >> 32) - 1; }
+    [[nodiscard]] constexpr std::uint32_t channel() const noexcept { return static_cast<std::uint32_t>(value >> 20) & 0xFFFu; }
+    [[nodiscard]] constexpr std::uint32_t index() const noexcept { return static_cast<std::uint32_t>(value) & 0xFFFFFu; }
+
+    friend constexpr bool operator==(EventRef, EventRef) noexcept = default;
+    friend constexpr auto operator<=>(EventRef, EventRef) noexcept = default;
+};
+
+/**
  * @brief Детерминированный идентификатор типа события.
  *
  * Строится как FNV-1a от имени события (`E::event_name`), а не от имени C++-типа.

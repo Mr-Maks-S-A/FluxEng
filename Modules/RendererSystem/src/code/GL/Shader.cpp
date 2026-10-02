@@ -1,4 +1,4 @@
-#include <RendererSystem/GL/Shader.hpp>
+#include "Shader.hpp"
 
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -150,6 +150,20 @@ void Shader::set(std::string_view name, const glm::vec4& value) const {
 
 void Shader::set(std::string_view name, const glm::mat4& value) const {
     glUniformMatrix4fv(uniform_location(name), 1, GL_FALSE, glm::value_ptr(value));
+}
+
+void Shader::set_array(std::string_view name, std::span<const glm::vec3> values) const {
+    if (values.empty()) return;
+    std::string element(name);
+    element += "[0]";
+    glUniform3fv(uniform_location(element), static_cast<GLsizei>(values.size()), glm::value_ptr(values.front()));
+}
+
+void Shader::set_array(std::string_view name, std::span<const glm::vec4> values) const {
+    if (values.empty()) return;
+    std::string element(name);
+    element += "[0]";
+    glUniform4fv(uniform_location(element), static_cast<GLsizei>(values.size()), glm::value_ptr(values.front()));
 }
 
 } // namespace RendererSystem::GL

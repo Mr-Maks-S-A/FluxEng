@@ -17,11 +17,16 @@
 #    pragma GCC diagnostic ignored "-Wshadow"
 #    pragma GCC diagnostic ignored "-Wdouble-promotion"
 #    pragma GCC diagnostic ignored "-Wunused-function"
+#    pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
 #define STBI_NO_STDIO
 #include <stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_STATIC
+#define STBI_WRITE_NO_STDIO
+#include <stb_image_write.h>
 #if defined(__GNUC__)
 #    pragma GCC diagnostic pop
 #endif
@@ -111,6 +116,62 @@ void Image::flip_vertically() noexcept {
                          m_pixels.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(top + 1) * row),
                          m_pixels.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(bottom) * row));
     }
+}
+
+void Image::blend(const Image& source, int x, int y) noexcept {
+    const int x0 = std::max(x, 0);
+    const int y0 = std::max(y, 0);
+    const int x1 = std::min(x + source.width(), m_width);
+    const int y1 = std::min(y + source.height(), m_height);
+    for (int row = y0; row < y1; ++row) {
+        for (int col = x0; col < x1; ++col) {
+            const Color top = source.pixel(col - x, row - y);
+            if (top.a == 0) {
+                continue;
+            }
+            const Color bottom = pixel(col, row);
+            const unsigned a = top.a;
+            const unsigned inv = 255u - a;
+            const auto mix = [&](std::uint8_t t, std::uint8_t b) {
+                return static_cast<std::uint8_t>((unsigned{t} * a + unsigned{b} * inv + 127u) / 255u);
+            };
+            const auto alpha = static_cast<std::uint8_t>(a + (unsigned{bottom.a} * inv + 127u) / 255u);
+            set_pixel(col, row, Color{mix(top.r, bottom.r), mix(top.g, bottom.g), mix(top.b, bottom.b), alpha});
+        }
+    }
+}
+
+std::vector<std::byte> Image::encode_png() const {
+    std::vector<std::byte> out;
+    if (empty()) {
+        return out;
+    }
+    const auto write = [](void* context, void* data, int size) {
+        auto* bytes = static_cast<std::vector<std::byte>*>(context);
+        const auto* begin = static_cast<const std::byte*>(data);
+        bytes->insert(bytes->end(), begin, begin + size);
+    };
+    stbi_write_png_to_func(write, &out, m_width, m_height, 4, m_pixels.data(), m_width * 4);
+    return out;
+}
+
+std::expected<void, std::string> Image::save_png(const std::filesystem::path& path) const {
+    if (empty()) {
+        return std::unexpected(std::string("cannot save an empty image"));
+    }
+    const std::vector<std::byte> png = encode_png();
+    if (png.empty()) {
+        return std::unexpected(std::format("cannot encode '{}' as PNG", path.string()));
+    }
+    std::ofstream file(path, std::ios::binary);
+    if (!file) {
+        return std::unexpected(std::format("cannot open '{}' for writing", path.string()));
+    }
+    file.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+    if (!file) {
+        return std::unexpected(std::format("cannot write '{}'", path.string()));
+    }
+    return {};
 }
 
 } // namespace RendererSystem

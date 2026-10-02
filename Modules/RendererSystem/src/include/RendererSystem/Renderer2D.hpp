@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file Renderer2D.hpp
- * @brief Батчевый 2D-рендер на OpenGL 3.3: спрайты, прямоугольники, линии.
+ * @brief Батчевый 2D-рендер поверх RHI (OpenGL или Vulkan): спрайты, прямоугольники, линии, текст.
  */
 
 #include <RendererSystem/Batch/SpriteBatch.hpp>
@@ -9,9 +9,10 @@
 #include <RendererSystem/Core/Geometry.hpp>
 #include <RendererSystem/Core/Handles.hpp>
 #include <RendererSystem/Core/Image.hpp>
-#include <RendererSystem/GL/Shader.hpp>
-#include <RendererSystem/GL/Texture.hpp>
+#include <RendererSystem/RHI/Device.hpp>
+#include <RendererSystem/RHI/Resources.hpp>
 #include <RendererSystem/Scene/Camera2D.hpp>
+#include <RendererSystem/Text/Font.hpp>
 
 #include <glm/mat4x4.hpp>
 
@@ -20,6 +21,7 @@
 #include <expected>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace RendererSystem {
@@ -42,10 +44,24 @@ struct RenderStats {
 };
 
 /**
+ * @brief Как рисовать текст.
+ */
+struct TextStyle {
+    float size = 0.0f;                    ///< Кегль в единицах мира/экрана; 0 — как запечён шрифт.
+    Color color = Colors::white;          ///< Цвет.
+    TextAlign align = TextAlign::Left;    ///< Выравнивание строк.
+    float max_width = 0.0f;               ///< Перенос по словам; 0 — без переноса.
+    float line_spacing = 1.0f;            ///< Множитель межстрочного интервала.
+    std::int32_t layer = 0;               ///< Слой спрайтов текста.
+    Color shadow = Colors::transparent;   ///< Цвет тени (прозрачный — без тени).
+    glm::vec2 shadow_offset{1.5f, 1.5f};  ///< Смещение тени.
+};
+
+/**
  * @brief 2D-рендер: собирает кадр в SpriteBatch и рисует его минимумом draw call'ов.
  *
- * Рендеру нужен только текущий OpenGL-контекст — окно, ввод и время кадра
- * принадлежат другим модулям.
+ * Рендеру нужно только устройство RHI (OpenGL или Vulkan) — окно, ввод и время кадра
+ * принадлежат другим модулям. Рисует в текущую цель устройства (экран или RenderTarget).
  *
  * Кадр:
  * @code
@@ -57,16 +73,15 @@ struct RenderStats {
  * RenderStats stats = renderer.end();
  * @endcode
  *
- * @pre Все методы требуют текущий OpenGL 3.3 core контекст.
- * @note Не потокобезопасен (как и сам OpenGL-контекст).
+ * @note Не потокобезопасен (как и устройство). Должен умереть раньше устройства.
  */
 class Renderer2D {
 public:
     /**
-     * @brief Создаёт рендер в текущем контексте.
-     * @return Рендер или текст ошибки (нет контекста, не собрался встроенный шейдер).
+     * @brief Создаёт рендер на устройстве.
+     * @return Рендер или текст ошибки (не собрался встроенный шейдер).
      */
-    [[nodiscard]] static std::expected<Renderer2D, std::string> create(const RendererConfig& config = {});
+    [[nodiscard]] static std::expected<Renderer2D, std::string> create(RHI::Device& device, const RendererConfig& config = {});
 
     ~Renderer2D();
     Renderer2D(const Renderer2D&) = delete;
@@ -77,28 +92,47 @@ public:
     // ================================================================= ресурсы
 
     /// @brief Загружает изображение в видеопамять и возвращает дескриптор.
-    [[nodiscard]] TextureHandle create_texture(const Image& image, const GL::TextureDesc& desc = {});
+    [[nodiscard]] TextureHandle create_texture(const Image& image, const TextureDesc& desc = {});
 
     /// @brief Загружает изображение из файла.
     [[nodiscard]] std::expected<TextureHandle, std::string> load_texture(const std::filesystem::path& path,
-                                                                         const GL::TextureDesc& desc = {});
+                                                                         const TextureDesc& desc = {});
 
     /**
      * @brief Текстура по дескриптору.
      * @throws RendererError Дескриптор не из этого рендера.
      */
-    [[nodiscard]] const GL::Texture& texture(TextureHandle handle) const;
+    [[nodiscard]] const Texture& texture(TextureHandle handle) const;
 
     /// @brief Количество текстур (включая встроенную белую).
     [[nodiscard]] std::size_t texture_count() const noexcept { return m_textures.size(); }
 
+    /**
+     * @brief Забирает шрифт и загружает его атлас в видеопамять.
+     *
+     * По умолчанию атлас фильтруется линейно: текст можно рисовать в любом кегле.
+     */
+    [[nodiscard]] FontHandle add_font(Font font, const TextureDesc& desc = {.filter = TextureFilter::Linear});
+
+    /**
+     * @brief Шрифт по дескриптору.
+     * @throws RendererError Дескриптор не из этого рендера.
+     */
+    [[nodiscard]] const Font& font(FontHandle handle) const;
+
+    /// @brief Размер блока текста при стиле `style`.
+    [[nodiscard]] glm::vec2 measure_text(FontHandle handle, std::string_view text, const TextStyle& style = {}) const;
+
     // ================================================================= кадр
 
-    /// @brief glViewport на всю область вывода.
-    void set_viewport(int width, int height) noexcept;
+    /// @brief Область вывода в текущей цели устройства.
+    void set_viewport(int width, int height);
 
     /// @brief Очищает текущую цель цветом.
-    void clear(Color color) noexcept;
+    void clear(Color color);
+
+    /// @brief Устройство, на котором работает рендер.
+    [[nodiscard]] RHI::Device& device() const noexcept { return *m_device; }
 
     /// @brief Начинает кадр с матрицей `view_projection`.
     void begin(const glm::mat4& view_projection);
@@ -119,6 +153,12 @@ public:
     }
 
     /**
+     * @brief Текст UTF-8; `top_left` — левый верх блока (при выравнивании по центру/вправо блок шириной max_width).
+     * @return Размер нарисованного блока.
+     */
+    glm::vec2 draw_text(FontHandle handle, std::string_view text, glm::vec2 top_left, const TextStyle& style = {});
+
+    /**
      * @brief Завершает кадр: сортирует, загружает вершины и рисует.
      * @return Статистика кадра.
      */
@@ -131,20 +171,27 @@ public:
     [[nodiscard]] const RenderStats& last_stats() const noexcept { return m_stats; }
 
 private:
-    Renderer2D(GL::Shader shader, const RendererConfig& config);
+    Renderer2D(RHI::Device& device, Pipeline pipeline, const RendererConfig& config);
 
     void ensure_capacity(std::size_t quads);
     void release() noexcept;
 
-    GL::Shader m_shader;
-    std::vector<GL::Texture> m_textures;
+    struct FontEntry {
+        Font font;
+        TextureHandle texture;
+    };
+
+    RHI::Device* m_device = nullptr;
+    Pipeline m_pipeline;
+    std::vector<Texture> m_textures;
+    std::vector<FontEntry> m_fonts;
+    std::vector<GlyphQuad> m_glyphs; ///< Раскладка текущего draw_text (память переиспользуется).
     SpriteBatch m_batch;
     glm::mat4 m_view_projection{1.0f};
     RenderStats m_stats{};
 
-    std::uint32_t m_vao = 0;
-    std::uint32_t m_vbo = 0;
-    std::uint32_t m_ebo = 0;
+    RHI::BufferId m_vertices{}; ///< Stream: вершины кадра.
+    RHI::BufferId m_indices{};  ///< Static: шесть индексов на четырёхугольник, растёт по требованию.
     std::size_t m_quad_capacity = 0;
     bool m_in_frame = false;
 };

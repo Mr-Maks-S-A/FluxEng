@@ -40,7 +40,7 @@ unsigned default_threads() noexcept {
 Scheduler::Scheduler(SchedulerConfig config) {
     m_scratch.reserve(config.threads + 1);
     for (unsigned i = 0; i <= config.threads; ++i) {
-        m_scratch.push_back(MemorySystem::Arena::reserve(config.scratch_bytes));
+        m_scratch.push_back(MemorySystem::Arena::reserve(config.scratch_bytes, MemorySystem::KiB(64), MemorySystem::MemoryTag::Jobs));
     }
     m_threads.reserve(config.threads);
     for (unsigned i = 1; i <= config.threads; ++i) {

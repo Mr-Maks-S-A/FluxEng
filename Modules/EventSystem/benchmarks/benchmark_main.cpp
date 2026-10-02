@@ -16,8 +16,12 @@
 
 #include <benchmark/benchmark.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <memory>
+#include <thread>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -268,6 +272,128 @@ BENCHMARK(BM_ReadOneField_Raw)->Range(min_events, max_events);
 // =============================================================================
 // 3. Накладные расходы шины
 // =============================================================================
+
+// =============================================================================
+// Дорожки потоков: запись без блокировок и слияние в порядке дорожек
+// =============================================================================
+
+/// Постоянные потоки для замера (создавать потоки на каждую итерацию — значит мерить создание потоков).
+/// Атомики здесь только раздают куски работы; запись событий в дорожки — без синхронизации.
+class BenchPool {
+public:
+    explicit BenchPool(unsigned threads) {
+        for (unsigned t = 0; t < threads; ++t) {
+            m_workers.emplace_back([this](std::stop_token stop) {
+                std::uint64_t seen = 0;
+                while (!stop.stop_requested()) {
+                    const std::uint64_t generation = m_generation.load(std::memory_order_acquire);
+                    if (generation == seen) {
+                        std::this_thread::yield();
+                        continue;
+                    }
+                    seen = generation;
+                    drain();
+                    m_done.fetch_add(1, std::memory_order_acq_rel);
+                }
+            });
+        }
+    }
+    ~BenchPool() {
+        for (auto& w : m_workers) w.request_stop();
+    }
+
+    /// Выполняет job(chunk) для chunk в [0, chunks) всеми потоками; возвращается, когда всё сделано.
+    void run(std::size_t chunks, const std::function<void(std::size_t)>& job) {
+        m_job = &job;
+        m_chunks = chunks;
+        m_next.store(0, std::memory_order_relaxed);
+        m_done.store(0, std::memory_order_relaxed);
+        m_generation.fetch_add(1, std::memory_order_acq_rel);
+        while (m_done.load(std::memory_order_acquire) < m_workers.size()) std::this_thread::yield();
+    }
+
+private:
+    void drain() {
+        for (std::size_t c = m_next.fetch_add(1); c < m_chunks; c = m_next.fetch_add(1)) (*m_job)(c);
+    }
+    std::vector<std::jthread> m_workers;
+    const std::function<void(std::size_t)>* m_job = nullptr;
+    std::size_t m_chunks = 0;
+    std::atomic<std::size_t> m_next{0};
+    std::atomic<std::size_t> m_done{0};
+    std::atomic<std::uint64_t> m_generation{0};
+};
+
+/// Один поток пишет через emit() — эталон.
+void BM_Lanes_SingleEmit(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    es::EventBus bus;
+    bus.register_event<PhysicsSoA>(es::ChannelConfig{.reserve = count});
+    auto writer = bus.writer<PhysicsSoA>();
+    for (auto _ : state) {
+        for (std::size_t i = 0; i < count; ++i) writer.emit(make_physics<PhysicsSoA>(i));
+        bus.advance_tick();
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_Lanes_SingleEmit)->Arg(1 << 20)->Unit(benchmark::kMicrosecond);
+
+/// N потоков пишут SoA-события в свои дорожки; в замер входит слияние (advance_tick).
+void BM_Lanes_Threads(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    const auto threads = static_cast<unsigned>(state.range(1));
+    constexpr std::size_t grain = 16 * 1024;
+    const std::size_t chunks = (count + grain - 1) / grain;
+    es::EventBus bus;
+    bus.register_event<PhysicsSoA>(es::ChannelConfig{.reserve = count});
+    auto writer = bus.writer<PhysicsSoA>();
+    BenchPool pool(threads);
+    for (auto _ : state) {
+        auto lanes = writer.lanes(chunks);
+        pool.run(chunks, [&](std::size_t chunk) {
+            const std::size_t end = std::min(count, (chunk + 1) * grain);
+            for (std::size_t i = chunk * grain; i < end; ++i) lanes.emit(chunk, make_physics<PhysicsSoA>(i));
+        });
+        bus.advance_tick(); // слияние дорожек: memcpy на колонку
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_Lanes_Threads)->Args({1 << 20, 1})->Args({1 << 20, 4})->Args({1 << 20, 8})->Unit(benchmark::kMicrosecond)->UseRealTime();
+
+/// Типичная система: на элемент — вычисление (проверка попадания), событие — у каждого восьмого.
+/// Здесь работа, а не запись в память, — главная цена, и дорожки дают масштабирование.
+std::uint64_t hit_test(std::size_t i) noexcept {
+    std::uint64_t h = i * 0x9E3779B97F4A7C15ull;
+    for (int k = 0; k < 32; ++k) h ^= (h << 13) ^ (h >> 7) ^ static_cast<std::uint64_t>(k);
+    return h;
+}
+
+void BM_Lanes_Work(benchmark::State& state) {
+    const auto count = static_cast<std::size_t>(state.range(0));
+    const auto threads = static_cast<unsigned>(state.range(1)); // 0 — без потоков, обычный emit
+    constexpr std::size_t grain = 16 * 1024;
+    const std::size_t chunks = (count + grain - 1) / grain;
+    es::EventBus bus;
+    bus.register_event<PhysicsSoA>(es::ChannelConfig{.reserve = count});
+    auto writer = bus.writer<PhysicsSoA>();
+    std::unique_ptr<BenchPool> pool = threads > 0 ? std::make_unique<BenchPool>(threads) : nullptr;
+    for (auto _ : state) {
+        if (!pool) {
+            for (std::size_t i = 0; i < count; ++i)
+                if (const auto h = hit_test(i); (h & 7) == 0) writer.emit(make_physics<PhysicsSoA>(h));
+        } else {
+            auto lanes = writer.lanes(chunks);
+            pool->run(chunks, [&](std::size_t chunk) {
+                const std::size_t end = std::min(count, (chunk + 1) * grain);
+                for (std::size_t i = chunk * grain; i < end; ++i)
+                    if (const auto h = hit_test(i); (h & 7) == 0) lanes.emit(chunk, make_physics<PhysicsSoA>(h));
+            });
+        }
+        bus.advance_tick();
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_Lanes_Work)->Args({1 << 20, 0})->Args({1 << 20, 1})->Args({1 << 20, 4})->Args({1 << 20, 8})->Unit(benchmark::kMicrosecond)->UseRealTime();
 
 void BM_AdvanceTick(benchmark::State& state) {
     // Много каналов, в каждом немного событий: стоимость смены тика.

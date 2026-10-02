@@ -6,8 +6,9 @@
  * - SpriteBatch::build — генерация вершин и сортировка: одна текстура, много текстур, повороты;
  * - advance_animations — обновление тысяч анимированных сущностей.
  *
- * GPU (нужен OpenGL 3.3, иначе пропускаются):
- * - полный кадр Renderer2D в Framebuffer с glFinish — цена загрузки вершин и draw call'ов.
+ * GPU (на каждом доступном бэкенде RHI — OpenGL и Vulkan; недоступный пропускается):
+ * - полный кадр Renderer2D в RenderTarget 1080p с ожиданием GPU — цена загрузки вершин и draw call'ов;
+ * - кадр Renderer3D: сотни лит-объектов (uniform-блок на вызов) — цена вызова рисования.
  *
  * Для осмысленных цифр собирайте в Release.
  */
@@ -17,6 +18,8 @@
 #include <RendererSystem/RendererSystem.hpp>
 
 #include <benchmark/benchmark.h>
+
+#include <glm/ext/matrix_transform.hpp>
 
 #include <cstdint>
 #include <random>
@@ -115,15 +118,31 @@ BENCHMARK(BM_AdvanceAnimations)->Range(min_sprites, max_sprites);
 // GPU
 // =============================================================================
 
-void BM_Renderer2D_Frame(benchmark::State& state, std::uint32_t textures) {
-    if (!RendererTests::GlTestContext::instance().available()) {
-        state.SkipWithError("OpenGL 3.3 context is not available");
+/// Устройство бэкенда (одно на процесс, не уничтожается — как GlTestContext) или nullptr.
+RHI::Device* device_for(Backend backend) {
+    static RHI::Device* gl = [] () -> RHI::Device* {
+        if (!RendererTests::GlTestContext::instance().available()) return nullptr;
+        auto device = RHI::Device::create({.backend = Backend::OpenGL});
+        return device ? device->release() : nullptr;
+    }();
+    static RHI::Device* vk = [] () -> RHI::Device* {
+        auto device = RHI::Device::create({.backend = Backend::Vulkan});
+        return device ? device->release() : nullptr;
+    }();
+    if (backend == Backend::OpenGL && gl != nullptr) RendererTests::GlTestContext::instance().make_current();
+    return backend == Backend::OpenGL ? gl : vk;
+}
+
+void BM_Renderer2D_Frame(benchmark::State& state, Backend backend, std::uint32_t textures) {
+    RHI::Device* device = device_for(backend);
+    if (device == nullptr) {
+        state.SkipWithError("backend is not available");
         return;
     }
-    auto renderer = Renderer2D::create();
-    auto target = GL::Framebuffer::create(1920, 1080);
+    auto renderer = Renderer2D::create(*device);
+    auto target = RenderTarget::create(*device, 1920, 1080);
     if (!renderer || !target) {
-        state.SkipWithError("cannot create renderer or framebuffer");
+        state.SkipWithError("cannot create renderer or render target");
         return;
     }
     for (std::uint32_t i = 0; i < textures; ++i) {
@@ -132,23 +151,59 @@ void BM_Renderer2D_Frame(benchmark::State& state, std::uint32_t textures) {
 
     const auto sprites = make_sprites(static_cast<std::size_t>(state.range(0)), textures, false);
     const Camera2D camera{.position = {960.0f, 540.0f}, .viewport = {1920.0f, 1080.0f}};
-    target->bind();
 
     for (auto _ : state) {
+        device->begin_frame(1920, 1080);
+        target->bind();
         renderer->clear(Colors::black);
         renderer->begin(camera);
         for (const SpriteInstance& sprite : sprites) {
             renderer->draw(sprite);
         }
         renderer->end();
-        glFinish(); // включаем в замер работу GPU, а не только постановку команд
+        device->end_frame();
+        device->wait_idle(); // включаем в замер работу GPU, а не только постановку команд
     }
-    GL::Framebuffer::bind_default();
     state.SetItemsProcessed(state.iterations() * state.range(0));
     state.counters["draw_calls"] = renderer->last_stats().draw_calls;
 }
-BENCHMARK_CAPTURE(BM_Renderer2D_Frame, one_texture, 1u)->Range(min_sprites, max_sprites)->Unit(benchmark::kMicrosecond);
-BENCHMARK_CAPTURE(BM_Renderer2D_Frame, 16_textures, 16u)->Range(min_sprites, max_sprites)->Unit(benchmark::kMicrosecond);
+BENCHMARK_CAPTURE(BM_Renderer2D_Frame, opengl_one_texture, Backend::OpenGL, 1u)->Range(min_sprites, max_sprites)->Unit(benchmark::kMicrosecond);
+BENCHMARK_CAPTURE(BM_Renderer2D_Frame, opengl_16_textures, Backend::OpenGL, 16u)->Range(min_sprites, max_sprites)->Unit(benchmark::kMicrosecond);
+BENCHMARK_CAPTURE(BM_Renderer2D_Frame, vulkan_one_texture, Backend::Vulkan, 1u)->Range(min_sprites, max_sprites)->Unit(benchmark::kMicrosecond);
+BENCHMARK_CAPTURE(BM_Renderer2D_Frame, vulkan_16_textures, Backend::Vulkan, 16u)->Range(min_sprites, max_sprites)->Unit(benchmark::kMicrosecond);
+
+void BM_Renderer3D_Objects(benchmark::State& state, Backend backend) {
+    RHI::Device* device = device_for(backend);
+    if (device == nullptr) {
+        state.SkipWithError("backend is not available");
+        return;
+    }
+    auto renderer = Renderer3D::create(*device);
+    auto target = RenderTarget::create(*device, 1280, 720, {.depth = true});
+    if (!renderer || !target) {
+        state.SkipWithError("cannot create renderer or render target");
+        return;
+    }
+    const auto count = static_cast<int>(state.range(0));
+    const Camera3D camera{.position = {0.0f, 20.0f, 30.0f}, .viewport = {1280.0f, 720.0f}};
+    for (auto _ : state) {
+        device->begin_frame(1280, 720);
+        target->bind();
+        renderer->clear(Colors::black);
+        renderer->begin(camera);
+        for (int i = 0; i < count; ++i) {
+            const glm::vec3 at{static_cast<float>(i % 32) - 16.0f, 0.0f, static_cast<float>(i / 32) - 16.0f};
+            renderer->draw_shape(i % 2 ? Renderer3D::Shape::Cube : Renderer3D::Shape::Sphere,
+                                 glm::scale(glm::translate(glm::mat4{1.0f}, at), glm::vec3{0.8f}), {.color = Colors::white});
+        }
+        renderer->end();
+        device->end_frame();
+        device->wait_idle();
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK_CAPTURE(BM_Renderer3D_Objects, opengl, Backend::OpenGL)->Range(64, 1024)->Unit(benchmark::kMicrosecond);
+BENCHMARK_CAPTURE(BM_Renderer3D_Objects, vulkan, Backend::Vulkan)->Range(64, 1024)->Unit(benchmark::kMicrosecond);
 
 } // namespace
 

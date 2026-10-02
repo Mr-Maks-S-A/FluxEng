@@ -4,7 +4,7 @@
  * @brief Типизированный читатель событий.
  */
 
-#include <EventSystem/Channel/StreamChannel.hpp>
+#include <EventSystem/Channel/Channel.hpp>
 #include <EventSystem/Core/Event.hpp>
 
 #include <cassert>
@@ -35,7 +35,7 @@ public:
     EventReader() noexcept = default;
 
     /// @brief Читатель канала. Обычно создаётся через EventBus::reader().
-    explicit EventReader(const StreamChannel& channel) noexcept : m_buffer(&channel.ready()) {}
+    explicit EventReader(const Channel& channel) noexcept : m_channel(&channel), m_buffer(&channel.ready()) {}
 
     /// @brief Количество доступных событий.
     [[nodiscard]] std::size_t size() const noexcept { return buffer().size(); }
@@ -90,6 +90,15 @@ public:
         }
     }
 
+    /**
+     * @brief Ссылка на событие `index` — передайте её в EventWriter::emit(e, cause), чтобы связать следствие с причиной.
+     * Одинакова при любом числе потоков (вычисляется из канала, момента и номера).
+     */
+    [[nodiscard]] EventRef ref(std::size_t index) const noexcept { return m_channel->ref(index); }
+
+    /// @brief Причина события `index` (если у канала включена трассировка), иначе нулевая ссылка.
+    [[nodiscard]] EventRef cause(std::size_t index) const noexcept { return buffer().cause(index); }
+
     /// @brief `true`, если читатель привязан к каналу.
     [[nodiscard]] bool valid() const noexcept { return m_buffer != nullptr; }
 
@@ -99,6 +108,7 @@ private:
         return *m_buffer;
     }
 
+    const Channel* m_channel = nullptr;
     const EventBuffer* m_buffer = nullptr;
 };
 

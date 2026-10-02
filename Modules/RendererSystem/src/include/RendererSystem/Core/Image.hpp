@@ -76,6 +76,22 @@ public:
     /// @brief Переворачивает строки (нужно при чтении из OpenGL, где строка 0 — низ).
     void flip_vertically() noexcept;
 
+    /**
+     * @brief Копирует `source` в точку (x, y) с альфа-смешиванием (обрезается по границам).
+     *
+     * Удобно собирать атласы и процедурные текстуры на CPU: подложка + рамка + значок.
+     */
+    void blend(const Image& source, int x, int y) noexcept;
+
+    /// @brief Кодирует в PNG (stb_image_write).
+    [[nodiscard]] std::vector<std::byte> encode_png() const;
+
+    /**
+     * @brief Сохраняет в PNG.
+     * @return Пусто или текст ошибки (пустое изображение, нельзя записать файл).
+     */
+    [[nodiscard]] std::expected<void, std::string> save_png(const std::filesystem::path& path) const;
+
 private:
     int m_width = 0;
     int m_height = 0;

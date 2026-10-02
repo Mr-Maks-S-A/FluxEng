@@ -6,12 +6,15 @@
 
 namespace MemorySystem {
 
-Arena Arena::reserve(std::size_t capacity, std::size_t commit_step) noexcept {
+Arena Arena::reserve(std::size_t capacity, std::size_t commit_step, MemoryTag tag) noexcept {
     Arena arena;
     VirtualRegion region = VirtualRegion::reserve(capacity);
     if (!region) {
         return arena;
     }
+    arena.m_tag = tag;
+    arena.m_tracked = true;
+    detail::track_region(tag, +1);
     arena.m_base = region.data();
     arena.m_capacity = region.reserved();
     arena.m_commit_step = align_up(std::max<std::size_t>(commit_step, 1), page_size());
@@ -38,10 +41,25 @@ Arena::Arena(Arena&& other) noexcept
       m_committed(std::exchange(other.m_committed, 0)),
       m_capacity(std::exchange(other.m_capacity, 0)),
       m_peak(std::exchange(other.m_peak, 0)),
-      m_commit_step(std::exchange(other.m_commit_step, 0)) {}
+      m_commit_step(std::exchange(other.m_commit_step, 0)),
+      m_tag(other.m_tag),
+      m_tracked(std::exchange(other.m_tracked, false)) {}
+
+Arena::~Arena() {
+    untrack();
+}
+
+void Arena::untrack() noexcept {
+    if (m_tracked) {
+        detail::track_decommit(m_tag, m_committed);
+        detail::track_region(m_tag, -1);
+        m_tracked = false;
+    }
+}
 
 Arena& Arena::operator=(Arena&& other) noexcept {
     if (this != &other) {
+        untrack();
         m_region = std::move(other.m_region);
         m_base = std::exchange(other.m_base, nullptr);
         m_position = std::exchange(other.m_position, 0);
@@ -49,6 +67,8 @@ Arena& Arena::operator=(Arena&& other) noexcept {
         m_capacity = std::exchange(other.m_capacity, 0);
         m_peak = std::exchange(other.m_peak, 0);
         m_commit_step = std::exchange(other.m_commit_step, 0);
+        m_tag = other.m_tag;
+        m_tracked = std::exchange(other.m_tracked, false);
     }
     return *this;
 }
@@ -80,6 +100,7 @@ bool Arena::grow_commit(std::size_t required_end) noexcept {
     if (!m_region.commit(m_committed, target - m_committed)) {
         return false;
     }
+    if (m_tracked) detail::track_commit(m_tag, target - m_committed);
     m_committed = target;
     return true;
 }
@@ -102,6 +123,7 @@ void Arena::shrink() noexcept {
         return;
     }
     m_region.decommit(keep, m_committed - keep);
+    if (m_tracked) detail::track_decommit(m_tag, m_committed - keep);
     m_committed = keep;
 }
 

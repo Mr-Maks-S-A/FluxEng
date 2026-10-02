@@ -18,6 +18,8 @@ void EventBuffer::swap(EventBuffer& other) noexcept {
     m_columns.swap(other.m_columns);
     std::swap(m_size, other.m_size);
     std::swap(m_capacity, other.m_capacity);
+    m_causes.swap(other.m_causes);
+    std::swap(m_tracing, other.m_tracing);
 }
 
 std::size_t EventBuffer::allocated_bytes() const noexcept {
@@ -57,6 +59,53 @@ void EventBuffer::push_raw(const std::byte* event) {
         }
     }
     ++m_size;
+    note_push();
+}
+
+void EventBuffer::append(const EventBuffer& source, std::size_t first, std::size_t count) {
+    assert(m_schema == source.m_schema || *m_schema == *source.m_schema);
+    assert(first + count <= source.m_size);
+    if (count == 0) return;
+    if (m_size + count > m_capacity) {
+        std::size_t capacity = m_capacity == 0 ? initial_capacity : m_capacity;
+        while (capacity < m_size + count) capacity *= 2;
+        reserve(capacity);
+    }
+    for (std::size_t c = 0; c < m_columns.size(); ++c) {
+        const std::size_t stride = m_columns[c].stride();
+        std::memcpy(m_columns[c].at(m_size), source.m_columns[c].at(first), stride * count);
+    }
+    m_size += count;
+    if (m_tracing) {
+        if (source.m_tracing) {
+            m_causes.insert(m_causes.end(), source.m_causes.begin() + static_cast<std::ptrdiff_t>(first),
+                            source.m_causes.begin() + static_cast<std::ptrdiff_t>(first + count));
+        } else {
+            m_causes.resize(m_causes.size() + count, 0);
+        }
+    }
+}
+
+void EventBuffer::overwrite(std::size_t index, const EventBuffer& source, std::size_t source_index) noexcept {
+    assert(index < m_size && source_index < source.m_size);
+    for (std::size_t c = 0; c < m_columns.size(); ++c) {
+        std::memcpy(m_columns[c].at(index), source.m_columns[c].at(source_index), m_columns[c].stride());
+    }
+    if (m_tracing) m_causes[index] = source.m_tracing ? source.m_causes[source_index] : 0;
+}
+
+void EventBuffer::erase_front(std::size_t count) noexcept {
+    if (count == 0) return;
+    if (count >= m_size) {
+        clear();
+        return;
+    }
+    const std::size_t rest = m_size - count;
+    for (ColumnBuffer& column : m_columns) {
+        std::memmove(column.at(0), column.at(count), column.stride() * rest);
+    }
+    m_size = rest;
+    if (m_tracing) m_causes.erase(m_causes.begin(), m_causes.begin() + static_cast<std::ptrdiff_t>(count));
 }
 
 void EventBuffer::read_raw(std::size_t index, std::byte* out) const noexcept {

@@ -5,6 +5,7 @@ set(EVENTSYSTEM_EXAMPLES
     02_soa_voxels
     03_module_graph
     04_runtime_schema
+    05_lanes_policies_causes
 )
 
 foreach(example IN LISTS EVENTSYSTEM_EXAMPLES)

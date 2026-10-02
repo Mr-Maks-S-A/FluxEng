@@ -41,3 +41,8 @@ add_subdirectory( "${CMAKE_SOURCE_DIR}/ExternalLibrary" )
 add_subdirectory( "${CMAKE_SOURCE_DIR}/Modules" )
 add_subdirectory( "${CMAKE_SOURCE_DIR}/Sandbox" )
 
+# Общие тесты: как модули работают вместе (юнит-тесты каждого модуля — в Modules/<Name>/tests).
+if(BUILD_TESTING AND FLUX_DEVELOPER)
+    add_subdirectory( "${CMAKE_SOURCE_DIR}/Tests" )
+endif()
+

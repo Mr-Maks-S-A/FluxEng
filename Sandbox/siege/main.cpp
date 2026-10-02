@@ -14,7 +14,7 @@
  *   SoA (`siege.shot`, `siege.impact`, `siege.killed`): десятки тысяч за тик;
  * - **MemorySystem** — пространственная сетка строится каждый тик в памяти тика (ни одного malloc);
  * - **JobSystem** — Navigation, Targeting и Ballistics идут через parallel_for; события кусков
- *   собираются в ChunkBuffers и уходят в шину в порядке кусков. Поэтому игра **одинакова при
+ *   пишутся в дорожки шины (EventWriter::lanes, по дорожке на кусок) и сливаются в порядке кусков. Поэтому игра **одинакова при
  *   любом числе потоков**: `--threads 0` и `--threads 7` дают одну и ту же контрольную сумму;
  * - **WindowSystem / Core / RendererSystem** — окно, ввод, фиксированный тик, отрисовка, оверлей.
  *
@@ -521,7 +521,6 @@ struct Navigation {
     es::EventWriter<BreachEvent> breach_out;
     std::vector<Terrain> map = make_map();
     FlowField flow;
-    js::ChunkBuffers<BreachEvent> breach_chunks;
     std::uint32_t rebuilds = 0;
 
     void declare(es::EventBus& bus) {
@@ -543,7 +542,7 @@ struct Navigation {
         const ECS::World& view = world; // внутри кусков — только чтение мира
 
         constexpr std::size_t grain = 1024;
-        breach_chunks.reset(js::chunk_count(grid.position.size(), grain));
+        auto breach_lanes = breach_out.lanes(js::chunk_count(grid.position.size(), grain)); // дорожка на кусок
         js::parallel_for(jobs, grid.position.size(), grain, [&](std::size_t begin, std::size_t end, std::size_t chunk) {
             for (std::size_t k = begin; k < end; ++k) {
                 if (grid.hp[k] <= 0.0f) continue; // убит, ждёт уничтожения
@@ -584,18 +583,17 @@ struct Navigation {
 
                 const glm::ivec2 nt = tile_of(next);
                 if (map[static_cast<std::size_t>(tile_index(nt.x, nt.y))] == Terrain::Castle) {
-                    breach_chunks[chunk].push_back(BreachEvent{.index = e.index, .generation = e.generation});
+                    breach_lanes.emit(chunk, BreachEvent{.index = e.index, .generation = e.generation});
                 }
             }
         });
-        breach_chunks.for_each([&](const BreachEvent& e) { breach_out.emit(e); }); // порядок кусков
+        // Дорожки сольются в шину при смене тика, в порядке кусков — без блокировок и копий в игре.
     }
 };
 
 /// Targeting — ∥ по башням: у каждой своя строка (cooldown), враги — только чтение из сетки.
 struct Targeting {
     es::EventWriter<ShotEvent> shots;
-    js::ChunkBuffers<ShotEvent> chunks;
     std::uint64_t fired = 0;
 
     void declare(es::EventBus& bus) {
@@ -608,7 +606,7 @@ struct Targeting {
         const std::span<Tower> towers = pool->components();
         const std::span<const ECS::Entity> enemy_entities = world.pool<Body>().entities();
         constexpr std::size_t grain = 32; // башня — сотни кандидатов: кусок «весомый» и при малом grain
-        chunks.reset(js::chunk_count(towers.size(), grain));
+        auto lanes = shots.lanes(js::chunk_count(towers.size(), grain));
         js::parallel_for(jobs, towers.size(), grain, [&](std::size_t begin, std::size_t end, std::size_t chunk) {
             for (std::size_t i = begin; i < end; ++i) {
                 Tower& tower = towers[i];
@@ -632,15 +630,14 @@ struct Targeting {
                 });
                 if (best == UINT32_MAX) continue;
                 const ECS::Entity target = enemy_entities[grid.row[best]];
-                chunks[chunk].push_back(ShotEvent{.from_x = tower.position.x, .from_y = tower.position.y,
+                lanes.emit(chunk, ShotEvent{.from_x = tower.position.x, .from_y = tower.position.y,
                                                   .target_index = target.index, .target_generation = target.generation,
                                                   .kind = static_cast<std::uint32_t>(tower.kind)});
                 tower.cooldown = spec.cooldown;
                 ++tower.shots;
             }
         });
-        fired += chunks.total();
-        chunks.for_each([&](const ShotEvent& s) { shots.emit(s); });
+        fired += lanes.total();
     }
 };
 
@@ -657,7 +654,6 @@ struct Ballistics {
     es::EventReader<ShotEvent> shots;
     es::EventWriter<ImpactEvent> impacts;
     std::vector<Projectile> flying;
-    js::ChunkBuffers<ImpactEvent> chunks;
     std::uint64_t impacts_total = 0;
 
     void declare(es::EventBus& bus) {
@@ -680,7 +676,7 @@ struct Ballistics {
 
         const std::span<const ECS::Entity> enemy_entities = world.find_pool<Body>()->entities();
         constexpr std::size_t grain = 512;
-        chunks.reset(js::chunk_count(flying.size(), grain));
+        auto lanes = impacts.lanes(js::chunk_count(flying.size(), grain));
         js::parallel_for(jobs, flying.size(), grain, [&](std::size_t begin, std::size_t end, std::size_t chunk) {
             for (std::size_t i = begin; i < end; ++i) {
                 Projectile& p = flying[i];
@@ -697,21 +693,20 @@ struct Ballistics {
                 p.done = true;
                 if (spec.splash <= 0.0f) {
                     if (world.valid(p.target))
-                        chunks[chunk].push_back({.target_index = p.target.index, .target_generation = p.target.generation, .damage = spec.damage});
+                        lanes.emit(chunk, {.target_index = p.target.index, .target_generation = p.target.generation, .damage = spec.damage});
                 } else {
                     grid.for_each_in(p.aim, spec.splash, [&](std::uint32_t k) {
                         const glm::vec2 d = grid.position[k] - p.aim;
                         if (grid.hp[k] > 0.0f && d.x * d.x + d.y * d.y <= spec.splash * spec.splash) {
                             const ECS::Entity victim = enemy_entities[grid.row[k]];
-                            chunks[chunk].push_back({.target_index = victim.index, .target_generation = victim.generation, .damage = spec.damage});
+                            lanes.emit(chunk, {.target_index = victim.index, .target_generation = victim.generation, .damage = spec.damage});
                         }
                         return true;
                     });
                 }
             }
         });
-        impacts_total += chunks.total();
-        chunks.for_each([&](const ImpactEvent& e) { impacts.emit(e); });
+        impacts_total += lanes.total();
         std::erase_if(flying, [](const Projectile& p) { return p.done; }); // устойчиво: порядок сохраняется
     }
 };

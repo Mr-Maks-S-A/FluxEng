@@ -12,8 +12,10 @@
  * - **EventSystem** — правки блоков (`voxel.block_edit` → `voxel.block_changed`), загрузка/выгрузка чанков;
  * - **ECSSystem** — игрок и осколки разбитых блоков (Transform, Velocity, Debris);
  * - **Core / WindowSystem** — окно, фиксированный тик 60 Гц, клавиши → события, оверлей 2D;
- * - **RendererSystem** — только `Shader` и 2D-оверлей. 3D-рендер (сетки чанков на GPU, камера
- *   с перспективой, отсечение по пирамиде видимости, туман) — свой, в этом файле `[в модуль]`.
+ * - **RendererSystem (RHI)** — свой конвейер (вершина «позиция + цвет», туман) через Pipeline, сетки чанков — Mesh
+ *   с VertexLayout, Camera3D и Frustum из модуля, 2D-оверлей. Работает на OpenGL и Vulkan (`--backend gl|vulkan`):
+ *   в игре нет ни одного вызова графического API. stb не используется: шум — свой (hash3 + value noise).
+ * - **WindowSystem** — захват курсора (`set_cursor_mode`) для обзора мышью.
  *
  * Порядок тика:
  * 1. Controller — ходьба/полёт игрока, столкновения с блоками (AABB по осям);
@@ -286,7 +288,7 @@ struct Terrain {
     es::EventWriter<ChunkLoadedEvent> loaded_out;
     es::EventWriter<ChunkUnloadedEvent> unloaded_out;
 
-    ms::Pool<ChunkBlocks> pool = ms::Pool<ChunkBlocks>::reserve(16'384);
+    ms::Pool<ChunkBlocks> pool = ms::Pool<ChunkBlocks>::reserve(16'384, ms::KiB(64), ms::MemoryTag::Game);
     std::unordered_map<ChunkKey, ChunkBlocks*, ChunkKeyHash> chunks;
     int radius = 8;
     int budget_per_tick = 12;         ///< Сколько чанков генерировать за тик (остальные — в следующих).
@@ -590,6 +592,9 @@ std::optional<RayHit> raycast(const Terrain& terrain, glm::vec3 origin, glm::vec
     return std::nullopt;
 }
 
+/// Цвет неба = цвет очистки кадра (0x8CBDF2), к нему же сходится туман.
+constexpr glm::vec3 sky_color{0x8C / 255.0f, 0xBD / 255.0f, 0xF2 / 255.0f};
+
 glm::vec3 look_direction(float yaw, float pitch) {
     return {std::cos(pitch) * std::cos(yaw), std::sin(pitch), std::cos(pitch) * std::sin(yaw)};
 }
@@ -773,151 +778,125 @@ struct DebrisSystem {
 };
 
 // =============================================================================
-// WorldRenderer — свой 3D-рендер [в модуль: RendererSystem 3D]
+// WorldRenderer — 3D поверх RHI: одинаково на OpenGL и Vulkan
 // =============================================================================
 
-constexpr std::string_view voxel_vs = R"(#version 330 core
-layout(location = 0) in vec3 a_position;
-layout(location = 1) in vec4 a_color;
-uniform mat4 u_view_projection;
-uniform vec3 u_eye;
-out vec4 v_color;
-out float v_distance;
+/// Раскладка Vertex для RHI: позиция + цвет RGBA8 (байты R, G, B, A по порядку).
+constexpr RHI::VertexLayout voxel_layout = RHI::VertexLayout::make(
+    sizeof(Vertex), {{0, 3, RHI::AttributeType::Float, 0}, {1, 4, RHI::AttributeType::UnsignedByteNorm, offsetof(Vertex, rgba)}});
+
+/// Свои шейдеры на общем GLSL RHI (макросы FLUX_*): один текст — оба бэкенда.
+constexpr std::string_view voxel_uniforms = R"(
+FLUX_UNIFORM(0, 0) Frame {
+    mat4 view_projection;
+    vec4 eye;
+    vec4 fog_color;
+    vec4 fog_range; // x — начало, y — конец
+} frame;
+)";
+
+constexpr std::string_view voxel_vs = R"(
+FLUX_LOCATION(0) in vec3 a_position;
+FLUX_LOCATION(1) in vec4 a_color;
+FLUX_VARYING(0) out vec4 v_color;
+FLUX_VARYING(1) out float v_distance;
 void main() {
     v_color = a_color;
-    v_distance = length(a_position - u_eye);
-    gl_Position = u_view_projection * vec4(a_position, 1.0);
+    v_distance = length(a_position - frame.eye.xyz);
+    FLUX_POSITION(frame.view_projection * vec4(a_position, 1.0));
 }
 )";
 
-constexpr std::string_view voxel_fs = R"(#version 330 core
-in vec4 v_color;
-in float v_distance;
-uniform vec3 u_fog_color;
-uniform vec2 u_fog_range;
-out vec4 frag_color;
+constexpr std::string_view voxel_fs = R"(
+FLUX_VARYING(0) in vec4 v_color;
+FLUX_VARYING(1) in float v_distance;
+FLUX_LOCATION(0) out vec4 frag_color;
 void main() {
-    float fog = smoothstep(u_fog_range.x, u_fog_range.y, v_distance);
-    frag_color = vec4(mix(v_color.rgb, u_fog_color, fog), 1.0);
+    float fog = smoothstep(frame.fog_range.x, frame.fog_range.y, v_distance);
+    frag_color = vec4(mix(v_color.rgb, frame.fog_color.rgb, fog), 1.0);
 }
 )";
 
-/// Буфер вершин на GPU: VAO + VBO с раскладкой Vertex. [в модуль: RendererSystem::Mesh]
-struct GpuMesh {
-    GLuint vao = 0, vbo = 0;
-    GLsizei count = 0;
-    std::uint32_t version = 0;
-
-    void upload(std::span<const Vertex> vertices, GLenum usage = GL_STATIC_DRAW) {
-        if (vao == 0) {
-            glGenVertexArrays(1, &vao);
-            glGenBuffers(1, &vbo);
-            glBindVertexArray(vao);
-            glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(0));
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Vertex), reinterpret_cast<void*>(offsetof(Vertex, rgba)));
-        }
-        glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size_bytes()), vertices.data(), usage);
-        glBindVertexArray(0);
-        count = static_cast<GLsizei>(vertices.size());
-    }
-    void draw(GLenum mode = GL_TRIANGLES) const {
-        if (count == 0) return;
-        glBindVertexArray(vao);
-        glDrawArrays(mode, 0, count);
-    }
-    void release() {
-        if (vao) glDeleteVertexArrays(1, &vao), glDeleteBuffers(1, &vbo);
-        vao = vbo = 0;
-        count = 0;
-    }
+struct FrameUniforms {
+    glm::mat4 view_projection{1.0f};
+    glm::vec4 eye{0.0f};
+    glm::vec4 fog_color{0.0f};
+    glm::vec4 fog_range{0.0f};
 };
 
-/// Шесть плоскостей пирамиды видимости из матрицы VP (метод Gribb–Hartmann). [в модуль: math / culling]
-struct Frustum {
-    std::array<glm::vec4, 6> planes{};
-    explicit Frustum(const glm::mat4& m) {
-        const glm::vec4 r0{m[0][0], m[1][0], m[2][0], m[3][0]}, r1{m[0][1], m[1][1], m[2][1], m[3][1]};
-        const glm::vec4 r2{m[0][2], m[1][2], m[2][2], m[3][2]}, r3{m[0][3], m[1][3], m[2][3], m[3][3]};
-        planes = {r3 + r0, r3 - r0, r3 + r1, r3 - r1, r3 + r2, r3 - r2};
-    }
-    [[nodiscard]] bool visible(glm::vec3 lo, glm::vec3 hi) const {
-        for (const glm::vec4& p : planes) {
-            const glm::vec3 far{p.x > 0 ? hi.x : lo.x, p.y > 0 ? hi.y : lo.y, p.z > 0 ? hi.z : lo.z};
-            if (p.x * far.x + p.y * far.y + p.z * far.z + p.w < 0.0f) return false;
-        }
-        return true;
-    }
+/// Сетка чанка на GPU и версия, которую она отражает.
+struct GpuChunk {
+    Mesh mesh;
+    std::uint32_t version = 0;
 };
 
 struct WorldRenderer {
-    std::optional<RendererSystem::GL::Shader> shader;
-    std::unordered_map<ChunkKey, GpuMesh, ChunkKeyHash> gpu;
-    GpuMesh lines;   ///< Рамка выбранного блока.
-    GpuMesh debris;  ///< Осколки: перестраивается каждый кадр.
+    Pipeline solid;   ///< Чанки и осколки: треугольники, отсечение задних граней, глубина.
+    Pipeline lines;   ///< Рамка выбранного блока.
+    std::unordered_map<ChunkKey, GpuChunk, ChunkKeyHash> gpu;
+    Mesh outline;     ///< Stream: перестраивается каждый кадр.
+    Mesh debris;      ///< Stream.
     std::vector<Vertex> scratch;
     std::uint32_t drawn = 0, culled = 0;
     std::uint64_t uploads = 0;
     std::size_t gpu_bytes = 0;
 
-    void init() {
-        auto s = RendererSystem::GL::Shader::from_source(voxel_vs, voxel_fs);
-        if (!s) throw std::runtime_error(s.error());
-        shader.emplace(std::move(*s));
+    void init(RHI::Device& device) {
+        const std::string vs = std::string(voxel_uniforms) + std::string(voxel_vs);
+        const std::string fs = std::string(voxel_uniforms) + std::string(voxel_fs);
+        auto make = [&](RHI::Primitive primitive, RHI::CullMode cull) {
+            auto pipeline = Pipeline::create(device, {.name = "voxel", .shader = {vs, fs}, .layout = voxel_layout, .primitive = primitive,
+                                                      .cull = cull, .depth = RHI::DepthMode::TestWrite});
+            if (!pipeline) throw std::runtime_error(pipeline.error());
+            return std::move(*pipeline);
+        };
+        solid = make(RHI::Primitive::Triangles, RHI::CullMode::Back);
+        lines = make(RHI::Primitive::Lines, RHI::CullMode::None);
+        outline = Mesh::create(device, voxel_layout, RHI::BufferUsage::Stream);
+        debris = Mesh::create(device, voxel_layout, RHI::BufferUsage::Stream);
     }
 
     /// Синхронизация с Mesher: загрузить новые версии сеток, освободить выгруженные.
-    void sync(const Mesher& mesher) {
-        for (auto it = gpu.begin(); it != gpu.end();) {
-            if (!mesher.meshes.contains(it->first)) {
-                it->second.release();
-                it = gpu.erase(it);
-            } else {
-                ++it;
-            }
-        }
+    void sync(RHI::Device& device, const Mesher& mesher) {
+        std::erase_if(gpu, [&](const auto& entry) { return !mesher.meshes.contains(entry.first); });
         gpu_bytes = 0;
         for (const auto& [key, mesh] : mesher.meshes) {
-            GpuMesh& g = gpu[key];
+            GpuChunk& g = gpu[key];
+            if (!g.mesh.valid()) g.mesh = Mesh::create(device, voxel_layout, RHI::BufferUsage::Dynamic);
             if (g.version != mesh.version) {
-                g.upload(mesh.vertices);
+                g.mesh.upload(std::span<const Vertex>(mesh.vertices));
                 g.version = mesh.version;
                 ++uploads;
             }
-            gpu_bytes += static_cast<std::size_t>(g.count) * sizeof(Vertex);
+            gpu_bytes += g.mesh.gpu_bytes();
         }
     }
 
-    void draw(const glm::mat4& view_projection, glm::vec3 eye, glm::vec3 fog, float fog_end, const std::optional<RayHit>& hit,
+    void draw(RHI::Device& device, const Camera3D& camera, glm::vec3 fog, float fog_end, const std::optional<RayHit>& hit,
               std::span<const Vertex> debris_vertices) {
-        glEnable(GL_DEPTH_TEST);
-        glEnable(GL_CULL_FACE);
-        glCullFace(GL_BACK);
-        glDisable(GL_BLEND);
-        shader->use();
-        shader->set("u_view_projection", view_projection);
-        shader->set("u_eye", eye);
-        shader->set("u_fog_color", fog);
-        shader->set("u_fog_range", glm::vec2{fog_end * 0.6f, fog_end});
-
-        const Frustum frustum(view_projection);
+        const RHI::UniformSlice frame = device.push_uniform(FrameUniforms{.view_projection = camera.view_projection(),
+                                                                          .eye = glm::vec4(camera.position, 1.0f),
+                                                                          .fog_color = glm::vec4(fog, 1.0f),
+                                                                          .fog_range = {fog_end * 0.6f, fog_end, 0.0f, 0.0f}});
+        const auto submit = [&](const Mesh& mesh, const Pipeline& pipeline) {
+            RHI::DrawCall call = mesh.draw_call(pipeline.id());
+            call.frame = frame;
+            device.draw(call);
+        };
+        const Frustum frustum = camera.frustum();
         drawn = culled = 0;
         for (const auto& [key, g] : gpu) {
             const glm::vec3 lo{static_cast<float>(key.x * chunk_side), 0.0f, static_cast<float>(key.z * chunk_side)};
-            if (!frustum.visible(lo, lo + glm::vec3{chunk_side, chunk_height, chunk_side})) {
+            if (!frustum.intersects(Aabb{lo, lo + glm::vec3{chunk_side, chunk_height, chunk_side}})) {
                 ++culled;
                 continue;
             }
-            g.draw();
+            submit(g.mesh, solid);
             ++drawn;
         }
         if (!debris_vertices.empty()) {
-            debris.upload(debris_vertices, GL_STREAM_DRAW);
-            debris.draw();
+            debris.upload(debris_vertices);
+            submit(debris, solid);
         }
         if (hit) { // рамка блока под прицелом: 12 рёбер чуть больше блока
             const glm::vec3 lo = glm::vec3(hit->block) - 0.002f, hi = glm::vec3(hit->block) + 1.002f;
@@ -934,19 +913,17 @@ struct WorldRenderer {
                 edge({lo.x, y, lo.z}, {hi.x, y, lo.z}), edge({lo.x, y, hi.z}, {hi.x, y, hi.z});
                 edge({lo.x, y, lo.z}, {lo.x, y, hi.z}), edge({hi.x, y, lo.z}, {hi.x, y, hi.z});
             }
-            lines.upload(scratch, GL_STREAM_DRAW);
-            lines.draw(GL_LINES);
+            outline.upload(std::span<const Vertex>(scratch));
+            submit(outline, lines);
         }
-        glBindVertexArray(0);
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_DEPTH_TEST); // дальше рисует 2D-оверлей Core
     }
 
     void release() {
-        for (auto& [key, g] : gpu) g.release();
         gpu.clear();
-        lines.release();
-        debris.release();
+        outline = {};
+        debris = {};
+        solid = {};
+        lines = {};
     }
 };
 
@@ -981,7 +958,7 @@ public:
         controller.declare(bus);
         interaction.declare(bus);
         debris_system.declare(bus);
-        renderer.init();
+        renderer.init(app.device());
 
         glm::vec3 spawn{8.5f, static_cast<float>(terrain_height(8, 8)) + 1.01f, 8.5f};
 
@@ -1030,8 +1007,8 @@ public:
         }
     }
 
-    void render(Core::App& app, Renderer2D& /*r*/) override {
-        // Обзор мышью — в домене кадра (плавно при любой частоте тиков). [в модуль: относительный ввод мыши]
+    void frame(Core::App& app, float /*seconds*/) override {
+        // Обзор мышью — в домене кадра (плавно при любой частоте тиков).
         WindowSystem::Window& window = app.window();
         if (window.input().pressed(GLFW_KEY_TAB)) capture(app, !captured);
         if (captured && !controller.autopilot) {
@@ -1039,26 +1016,24 @@ public:
             controller.yaw += static_cast<float>(d.x) * 0.0025f;
             controller.pitch = std::clamp(controller.pitch - static_cast<float>(d.y) * 0.0025f, -1.55f, 1.55f);
         }
+        profiler.measure(Profiler::Upload, [&] { renderer.sync(app.device(), mesher); });
+    }
 
-        profiler.measure(Profiler::Upload, [&] { renderer.sync(mesher); });
+    void render_3d(Core::App& app, Renderer3D& /*r*/) override {
         profiler.measure(Profiler::Render, [&] {
             const Transform& t = *world.get<Transform>(player);
             const glm::vec3 eye = glm::mix(t.previous, t.position, app.tick_alpha()) + glm::vec3{0.0f, eye_height, 0.0f};
             const glm::vec3 dir = look_direction(controller.yaw, controller.pitch);
-            const glm::vec2 viewport = app.camera().viewport;
             const float far = static_cast<float>(terrain.radius * chunk_side);
-            const glm::mat4 projection = glm::perspective(glm::radians(70.0f), viewport.x / viewport.y, 0.05f, far + 32.0f);
-            const glm::mat4 view = glm::lookAt(eye, eye + dir, glm::vec3{0.0f, 1.0f, 0.0f});
-
-            const glm::vec3 sky{0.55f, 0.74f, 0.95f};
-            glClearColor(sky.r, sky.g, sky.b, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            const Camera3D camera{.position = eye, .target = eye + dir, .fov_y = glm::radians(70.0f), .near_plane = 0.05f,
+                                  .far_plane = far + 32.0f, .viewport = app.camera().viewport};
 
             debris_vertices.clear();
             world.view<const Transform, const Debris>().each([&](const Transform& dt, const Debris& d) {
                 append_cube(debris_vertices, glm::mix(dt.previous, dt.position, app.tick_alpha()), 0.08f, shade(block_color[d.block], 0.9f));
             });
-            renderer.draw(projection * view, eye, sky, far, raycast(terrain, eye, dir, 6.0f), debris_vertices);
+            // Небо — цвет очистки кадра (AppConfig::clear_rgba), туман сходится к нему же.
+            renderer.draw(app.device(), camera, sky_color, far, raycast(terrain, eye, dir, 6.0f), debris_vertices);
         });
         ++profiler.frames;
     }
@@ -1123,9 +1098,8 @@ public:
 
 private:
     void capture(Core::App& app, bool on) {
-        // В WindowSystem нет захвата курсора — напрямую через GLFW. [в модуль: Window::set_cursor_mode]
         captured = on;
-        glfwSetInputMode(app.window().native_handle(), GLFW_CURSOR, on ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        app.window().set_cursor_mode(on ? WindowSystem::CursorMode::Captured : WindowSystem::CursorMode::Normal);
     }
 
     ECS::World world;
@@ -1146,5 +1120,7 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    return Core::run<Voxel>({.title = "Voxel", .ticks_per_second = 60.0, .pause_key = GLFW_KEY_P}, argc, argv);
+    return Core::run<Voxel>({.title = "Voxel", .ticks_per_second = 60.0, .pause_key = GLFW_KEY_P, .camera_controls = false,
+                             .clear_rgba = 0x8CBDF2FF},
+                            argc, argv);
 }

@@ -29,6 +29,7 @@ endif()
 
 add_library(MemorySystem STATIC
     src/code/Arena.cpp
+    src/code/Tags.cpp
     src/code/VirtualMemory.cpp
 )
 add_library(engine::MemorySystem ALIAS MemorySystem)

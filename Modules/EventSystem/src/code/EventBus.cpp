@@ -1,6 +1,7 @@
 #include <EventSystem/Bus/EventBus.hpp>
 #include <EventSystem/Core/Error.hpp>
 
+#include <algorithm>
 #include <format>
 #include <string>
 #include <utility>
@@ -9,11 +10,8 @@ namespace EventSystem {
 
 namespace {
 
-std::unique_ptr<IChannel> make_channel(const EventSchema& schema, const ChannelConfig& config) {
-    switch (config.delivery) {
-        case Delivery::Stream: return std::make_unique<StreamChannel>(schema, config);
-    }
-    throw EventSystemError(std::format("event '{}': unsupported delivery policy", schema.name));
+std::unique_ptr<Channel> make_channel(const EventSchema& schema, const ChannelConfig& config) {
+    return std::make_unique<Channel>(schema, config); // одна реализация на все политики и домены
 }
 
 } // namespace
@@ -40,6 +38,7 @@ IChannel& EventBus::register_schema(const EventSchema& schema, std::optional<Cha
     }
 
     auto channel = make_channel(schema, config.value_or(ChannelConfig{}));
+    channel->set_index(static_cast<std::uint32_t>(m_channels.size()));
     m_index.emplace(schema.id, m_channels.size());
     m_channels.push_back(std::move(channel));
     return *m_channels.back();
@@ -65,11 +64,11 @@ const IChannel* EventBus::find(std::string_view name) const noexcept {
     return channel != nullptr && channel->name() == name ? channel : nullptr;
 }
 
-StreamChannel& EventBus::stream_channel(const EventSchema& schema) {
-    return const_cast<StreamChannel&>(std::as_const(*this).stream_channel(schema));
+Channel& EventBus::channel_of(const EventSchema& schema) {
+    return const_cast<Channel&>(std::as_const(*this).channel_of(schema));
 }
 
-const StreamChannel& EventBus::stream_channel(const EventSchema& schema) const {
+const Channel& EventBus::channel_of(const EventSchema& schema) const {
     const IChannel* channel = find(schema.id);
     if (channel == nullptr) {
         throw EventSystemError(std::format("event '{}' is not registered", schema.name));
@@ -78,11 +77,7 @@ const StreamChannel& EventBus::stream_channel(const EventSchema& schema) const {
         throw EventSystemError(std::format("event '{}': C++ type does not match the registered schema",
                                            schema.name));
     }
-    if (channel->delivery() != Delivery::Stream) {
-        throw EventSystemError(std::format("event '{}': typed access is only available for Stream channels",
-                                           schema.name));
-    }
-    return static_cast<const StreamChannel&>(*channel);
+    return static_cast<const Channel&>(*channel);
 }
 
 void EventBus::require_declared(ModuleId module, EventId event, Role role) const {
@@ -112,11 +107,91 @@ void EventBus::declare_link(ModuleId module, EventId event, Role role) {
     }
 }
 
-void EventBus::advance_tick() {
+void EventBus::advance(Domain domain) {
     for (auto& channel : m_channels) {
+        if (channel->domain() != domain) continue;
         channel->advance();
+        if (channel->config().trace) record_trace(*channel);
     }
+}
+
+void EventBus::advance_tick() {
+    advance(Domain::Tick);
     ++m_tick;
+}
+
+void EventBus::advance_frame() {
+    advance(Domain::Frame);
+    ++m_frame;
+}
+
+// ================================================================= дерево причин
+
+void EventBus::set_trace_capacity(std::size_t records) {
+    m_journal_capacity = records;
+    m_journal.clear();
+    m_journal_head = 0;
+}
+
+void EventBus::record_trace(const Channel& channel) {
+    if (m_journal_capacity == 0) return;
+    const EventBuffer& ready = channel.ready();
+    for (std::size_t i = 0; i < ready.size(); ++i) {
+        const TraceRecord record{channel.ref(i), ready.cause(i), channel.schema().id};
+        if (m_journal.size() < m_journal_capacity) {
+            m_journal.push_back(record);
+        } else {
+            m_journal[m_journal_head] = record;
+            m_journal_head = (m_journal_head + 1) % m_journal_capacity;
+        }
+    }
+}
+
+std::vector<TraceRecord> EventBus::trace_journal() const {
+    std::vector<TraceRecord> out;
+    out.reserve(m_journal.size());
+    for (std::size_t i = 0; i < m_journal.size(); ++i) out.push_back(m_journal[(m_journal_head + i) % m_journal.size()]);
+    return out;
+}
+
+std::vector<TraceRecord> EventBus::cause_chain(EventRef ref) const {
+    std::vector<TraceRecord> chain;
+    const auto find = [&](EventRef r) -> const TraceRecord* {
+        for (const TraceRecord& record : m_journal) {
+            if (record.ref == r) return &record;
+        }
+        return nullptr;
+    };
+    for (const TraceRecord* record = find(ref); record != nullptr && chain.size() < 256; record = find(record->cause)) {
+        chain.push_back(*record);
+        if (!record->cause.valid()) break;
+    }
+    std::ranges::reverse(chain);
+    return chain;
+}
+
+std::vector<TraceRecord> EventBus::effects(EventRef ref) const {
+    std::vector<TraceRecord> out;
+    for (const TraceRecord& record : trace_journal()) {
+        if (record.cause == ref) out.push_back(record);
+    }
+    return out;
+}
+
+std::string EventBus::describe(EventRef ref) const {
+    const std::string name = ref.channel() < m_channels.size() ? std::string(m_channels[ref.channel()]->name()) : "?";
+    return std::format("{}@{}#{}", name, ref.time(), ref.index());
+}
+
+std::string EventBus::trace_tree(EventRef root, int depth) const {
+    std::string out;
+    const auto walk = [&](const auto& self, EventRef ref, int level) -> void {
+        out += std::string(static_cast<std::size_t>(level) * 2, ' ') + describe(ref) + "\n";
+        if (level >= depth) return;
+        for (const TraceRecord& child : effects(ref)) self(self, child.ref, level + 1);
+    };
+    walk(walk, root, 0);
+    return out;
 }
 
 void EventBus::clear_all() noexcept {

@@ -56,6 +56,7 @@ void BM_ParallelFor_Empty(benchmark::State& state) {
     for (auto _ : state) {
         js::parallel_for(jobs, 64, 1, [](std::size_t, std::size_t) {});
     }
+    state.SetItemsProcessed(state.iterations() * 64); // кусков в секунду: цена раздачи пустой работы
 }
 BENCHMARK(BM_ParallelFor_Empty)->Arg(0)->Arg(1)->Arg(3)->UseRealTime();
 

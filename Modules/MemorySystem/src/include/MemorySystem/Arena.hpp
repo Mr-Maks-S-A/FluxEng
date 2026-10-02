@@ -27,6 +27,7 @@
  */
 
 #include <MemorySystem/Core.hpp>
+#include <MemorySystem/Tags.hpp>
 #include <MemorySystem/VirtualMemory.hpp>
 
 #include <cassert>
@@ -70,9 +71,11 @@ public:
      * @brief Арена в собственном виртуальном резерве.
      * @param capacity    Предел роста, байт (резервируется сразу, подтверждается по мере надобности).
      * @param commit_step Шаг подтверждения физической памяти, байт.
+     * @param tag         Чья память — для отчёта memory_report() (теги в стиле Kohi).
      * @return Пустая арена, если ОС отказала в резерве.
      */
-    [[nodiscard]] static Arena reserve(std::size_t capacity, std::size_t commit_step = KiB(64)) noexcept;
+    [[nodiscard]] static Arena reserve(std::size_t capacity, std::size_t commit_step = KiB(64),
+                                       MemoryTag tag = MemoryTag::Untagged) noexcept;
 
     /**
      * @brief Арена поверх внешнего буфера. Буфер зануляется один раз, здесь.
@@ -86,7 +89,7 @@ public:
     Arena(Arena&& other) noexcept;
     /// @copydoc Arena(Arena&&)
     Arena& operator=(Arena&& other) noexcept;
-    ~Arena() = default;
+    ~Arena();
 
     /**
      * @brief Выделяет `size` байт с выравниванием `alignment`. Память нулевая.
@@ -139,9 +142,12 @@ public:
     [[nodiscard]] std::size_t capacity() const noexcept { return m_capacity; }
     /// @brief Все счётчики.
     [[nodiscard]] ArenaStats stats() const noexcept { return {m_position, m_peak, m_committed, m_capacity}; }
+    /// @brief Тег памяти.
+    [[nodiscard]] MemoryTag tag() const noexcept { return m_tag; }
 
 private:
     bool grow_commit(std::size_t required_end) noexcept;
+    void untrack() noexcept;
 
     VirtualRegion m_region;       ///< Пусто для арены над внешним буфером.
     std::byte* m_base = nullptr;
@@ -150,6 +156,8 @@ private:
     std::size_t m_capacity = 0;
     std::size_t m_peak = 0;
     std::size_t m_commit_step = 0;
+    MemoryTag m_tag = MemoryTag::Untagged;
+    bool m_tracked = false;       ///< Учитывается в тегах (только reserve(); over() — чужая память).
 };
 
 /**
@@ -193,10 +201,11 @@ public:
     DoubleArena() noexcept = default;
 
     /// @brief Две виртуальные арены по `capacity` байт.
-    [[nodiscard]] static DoubleArena reserve(std::size_t capacity, std::size_t commit_step = KiB(64)) noexcept {
+    [[nodiscard]] static DoubleArena reserve(std::size_t capacity, std::size_t commit_step = KiB(64),
+                                             MemoryTag tag = MemoryTag::Untagged) noexcept {
         DoubleArena pair;
-        pair.m_arenas[0] = Arena::reserve(capacity, commit_step);
-        pair.m_arenas[1] = Arena::reserve(capacity, commit_step);
+        pair.m_arenas[0] = Arena::reserve(capacity, commit_step, tag);
+        pair.m_arenas[1] = Arena::reserve(capacity, commit_step, tag);
         return pair;
     }
 
