@@ -1,10 +1,14 @@
 #pragma once
 /**
  * @file App.hpp
- * @brief Слой приложения движка: окно + рендер + шина событий, фиксированный тик симуляции.
+ * @brief Клиент движка: окно + рендер + ввод поверх RuntimeSystem::Runtime (шина, задачи, память, тик, модули).
  *
- * Модуль Core — то, что стоит между main() и игровой логикой. Игра реализует
- * интерфейс Game, а App владеет окном, рендером и шиной и крутит цикл.
+ * Модуль Core — то, что стоит между main() и игровой логикой клиента. Ядро без графики (шина событий, JobSystem,
+ * арены, фиксированный тик, модули с жизненным циклом) живёт в RuntimeSystem и доступно как App::runtime();
+ * выделенный сервер использует Runtime напрямую, без App. Игра реализует интерфейс Game, а App владеет окном
+ * и рендером и крутит цикл кадров.
+ *
+ * Модули (RuntimeSystem::Module) добавляются в Game::configure() и работают одинаково в клиенте и на сервере.
  *
  * Два домена времени:
  * - **кадр** (частота монитора): ввод, камера, отрисовка;
@@ -12,9 +16,16 @@
  *
  * Пауза останавливает тики, но не кадры: камеру можно двигать на паузе.
  *
+ * Запуск и остановка (App::run):
+ * ```
+ * Game::configure (add_module) → Runtime::initialize (declare всех, init по зависимостям) → Game::setup → кадры
+ *   → [любой выход, в том числе исключение] wait_idle → Game::shutdown → Module::shutdown в обратном порядке
+ * ```
+ *
  * Кадр App:
  * ```
- * poll_events → device.begin_frame → Game::frame (ввод кадра, рендер в текстуры) → тики (Game::tick + advance_tick)
+ * poll_events → device.begin_frame → Runtime::begin_frame (арена кадра, Module::frame) → Game::frame (ввод кадра,
+ *   рендер в текстуры) → Runtime::update: тики (Module::tick → Game::tick → advance_tick)
  *   → clear (цвет + глубина) → Game::render_3d → Game::render (2D, камера мира) → Game::render_overlay (пиксели экрана)
  *   → device.end_frame (Vulkan: показ) → window.swap_buffers (OpenGL)
  * ```
@@ -27,9 +38,11 @@
 #include <JobSystem/JobSystem.hpp>
 #include <MemorySystem/MemorySystem.hpp>
 #include <RendererSystem/RendererSystem.hpp>
+#include <RuntimeSystem/RuntimeSystem.hpp>
 #include <WindowSystem/Window.hpp> // окно, ввод; подключает glad + GLFW
 
 #include <array>
+#include <concepts>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -59,6 +72,9 @@ struct AppConfig {
     float ui_font_size = 32.0f;            ///< Кегль, в котором запекается шрифт интерфейса (App::ui_font()).
     RendererSystem::Backend backend = RendererSystem::Backend::OpenGL; ///< Графический API (`--backend gl|vulkan`).
     bool validation = false;               ///< Vulkan: слои валидации (`--validation`).
+    std::size_t tick_arena_bytes = MemorySystem::MiB(256); ///< Резерв каждой из двух арен тика (виртуальный).
+    std::size_t frame_arena_bytes = MemorySystem::MiB(64); ///< Резерв арены кадра (виртуальный).
+    bool profile_modules = false;          ///< Мерить время tick() модулей (Runtime::module_stats()).
     std::vector<std::string> extra_args{}; ///< Аргументы, которые Core не разобрал (для самой игры), по порядку.
 };
 
@@ -87,7 +103,12 @@ public:
     /// @brief Размер мира — для начальной 2D-камеры (3D-игре можно не переопределять).
     [[nodiscard]] virtual glm::vec2 world_size() const { return {1280.0f, 720.0f}; }
 
+    /// @brief Добавить модули движка (`app.add_module<M>(…)`). Вызывается до инициализации модулей;
+    /// модули можно создавать в любом порядке — порядок init задают их зависимости.
+    virtual void configure(App& /*app*/) {}
+
     /// @brief Объявить модули и события, получить писателей/читателей, создать текстуры.
+    /// Вызывается после инициализации модулей, добавленных в configure(): их сервисы уже готовы.
     virtual void setup(App& app) = 0;
 
     /**
@@ -114,7 +135,8 @@ public:
     /// @brief Строка состояния для заголовка окна.
     [[nodiscard]] virtual std::string status() const { return {}; }
 
-    /// @brief Конец работы (после последнего кадра, до отчёта шины): итоги, сводки.
+    /// @brief Конец работы (после последнего кадра, до отчёта шины): итоги, сводки. Вызывается и при исключении
+    /// в цикле (после setup()); GPU к этому моменту уже простаивает. Модули завершаются после него.
     virtual void shutdown(App& /*app*/) {}
 };
 
@@ -141,7 +163,16 @@ public:
     /// @brief Запускает игру; возвращает код выхода процесса.
     int run(Game& game);
 
-    [[nodiscard]] EventSystem::EventBus& bus() noexcept { return m_bus; }
+    /// @brief Ядро без графики: шина, задачи, память, тик, модули. То же, что получает выделенный сервер.
+    [[nodiscard]] RuntimeSystem::Runtime& runtime() noexcept { return m_runtime; }
+
+    /// @brief Добавляет модуль в Runtime (только из Game::configure()).
+    template<std::derived_from<RuntimeSystem::Module> M, typename... Args>
+    M& add_module(Args&&... args) {
+        return m_runtime.add<M>(std::forward<Args>(args)...);
+    }
+
+    [[nodiscard]] EventSystem::EventBus& bus() noexcept { return m_runtime.bus(); }
     [[nodiscard]] RendererSystem::Renderer2D& renderer() noexcept { return *m_renderer; }
     /// @brief Графическое устройство (RHI): свои конвейеры, сетки, цели рендера игры.
     [[nodiscard]] RendererSystem::RHI::Device& device() noexcept { return *m_device; }
@@ -162,25 +193,25 @@ public:
      * результаты в JobSystem::ChunkBuffers и сливают их в порядке кусков — тогда симуляция
      * одинакова при любом числе потоков, и прогон `--threads 0` служит эталоном.
      */
-    [[nodiscard]] JobSystem::Scheduler& jobs() noexcept { return m_jobs; }
+    [[nodiscard]] JobSystem::Scheduler& jobs() noexcept { return m_runtime.jobs(); }
     [[nodiscard]] const FrameInput& input() const noexcept { return m_input; }
 
     /// @brief Модуль "Platform": производитель KeyEvent и MouseButtonEvent.
     [[nodiscard]] EventSystem::ModuleId platform_module() const noexcept { return m_platform; }
 
     /// @brief Длительность тика симуляции в игровых секундах (не зависит от скорости).
-    [[nodiscard]] float tick_seconds() const noexcept { return static_cast<float>(m_step.tick_seconds()); }
+    [[nodiscard]] float tick_seconds() const noexcept { return static_cast<float>(m_runtime.step().tick_seconds()); }
     /// @brief Номер текущего тика.
-    [[nodiscard]] EventSystem::Tick tick() const noexcept { return m_bus.current_tick(); }
+    [[nodiscard]] EventSystem::Tick tick() const noexcept { return m_runtime.current_tick(); }
     /// @brief Доля пути к следующему тику, [0, 1): отрисовка может интерполировать движение.
-    [[nodiscard]] float tick_alpha() const noexcept { return m_step.alpha(); }
+    [[nodiscard]] float tick_alpha() const noexcept { return m_runtime.step().alpha(); }
 
     /// @brief Пауза симуляции (Game::frame продолжает вызываться).
-    [[nodiscard]] bool paused() const noexcept { return m_step.paused; }
+    [[nodiscard]] bool paused() const noexcept { return m_runtime.step().paused; }
     /// @brief Поставить / снять паузу.
-    void set_paused(bool paused) noexcept { m_step.paused = paused; }
+    void set_paused(bool paused) noexcept { m_runtime.step().paused = paused; }
     /// @brief Множитель скорости симуляции (1…8).
-    [[nodiscard]] int speed() const noexcept { return m_step.speed; }
+    [[nodiscard]] int speed() const noexcept { return m_runtime.step().speed; }
 
     /// @brief Параметры запуска (включая `extra_args` для игры).
     [[nodiscard]] const AppConfig& config() const noexcept { return m_config; }
@@ -191,11 +222,11 @@ public:
      * Всё, что выделено здесь в тике N, читается в тике N+1 через previous_tick_arena()
      * и освобождается (обнуляется) после него — та же модель, что у событий шины.
      */
-    [[nodiscard]] MemorySystem::Arena& tick_arena() noexcept { return m_tick_memory.current(); }
+    [[nodiscard]] MemorySystem::Arena& tick_arena() noexcept { return m_runtime.tick_arena(); }
     /// @brief Память прошлого тика: только чтение.
-    [[nodiscard]] const MemorySystem::Arena& previous_tick_arena() const noexcept { return m_tick_memory.previous(); }
+    [[nodiscard]] const MemorySystem::Arena& previous_tick_arena() const noexcept { return m_runtime.previous_tick_arena(); }
     /// @brief Временная память кадра (отрисовка, оверлей): очищается в начале каждого кадра.
-    [[nodiscard]] MemorySystem::Arena& frame_arena() noexcept { return m_frame_memory; }
+    [[nodiscard]] MemorySystem::Arena& frame_arena() noexcept { return m_runtime.frame_arena(); }
 
     /// @brief Печатает граф событий, предупреждения и статистику каналов.
     void print_event_report() const;
@@ -217,7 +248,8 @@ private:
     std::optional<RendererSystem::RenderTarget> m_offscreen; ///< «Экран» устройства без окна (Vulkan + скрытое окно).
     RendererSystem::FontHandle m_ui_font{};
     RendererSystem::FontHandle m_ui_font_bold{};
-    EventSystem::EventBus m_bus;
+    // Объявлен после устройства и рендеров: при уничтожении модули (а с ними их GPU-ресурсы) уходят раньше устройства.
+    RuntimeSystem::Runtime m_runtime;
     RendererSystem::Camera2D m_camera;
     FrameInput m_input;
 
@@ -225,10 +257,6 @@ private:
     EventSystem::EventWriter<KeyEvent> m_key_out;
     EventSystem::EventWriter<MouseButtonEvent> m_mouse_out;
 
-    FixedStep m_step;
-    JobSystem::Scheduler m_jobs;
-    MemorySystem::DoubleArena m_tick_memory = MemorySystem::DoubleArena::reserve(MemorySystem::MiB(256), MemorySystem::KiB(64), MemorySystem::MemoryTag::Engine);
-    MemorySystem::Arena m_frame_memory = MemorySystem::Arena::reserve(MemorySystem::MiB(64), MemorySystem::KiB(64), MemorySystem::MemoryTag::Scratch);
 };
 
 } // namespace Core

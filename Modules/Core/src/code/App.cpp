@@ -67,14 +67,19 @@ std::unique_ptr<RHI::Device> open_device(const AppConfig& config, const WindowSy
     return std::move(*device);
 }
 
+RuntimeSystem::RuntimeConfig runtime_config(const AppConfig& config) {
+    return {.ticks_per_second = config.ticks_per_second,
+            .lockstep = config.max_ticks >= 0, // --ticks N: один тик на кадр, прогон не зависит от скорости машины
+            .threads = config.threads,
+            .tick_arena_bytes = config.tick_arena_bytes,
+            .frame_arena_bytes = config.frame_arena_bytes,
+            .profile_modules = config.profile_modules};
+}
+
 } // namespace
 
 App::App(AppConfig config)
-    : m_config(std::move(config)), m_window(open_window(m_config)),
-      m_jobs(JobSystem::SchedulerConfig{
-          .threads = m_config.threads >= 0 ? static_cast<unsigned>(m_config.threads) : JobSystem::default_threads()}) {
-    m_step.ticks_per_second = m_config.ticks_per_second;
-    m_step.lockstep = m_config.max_ticks >= 0;
+    : m_config(std::move(config)), m_window(open_window(m_config)), m_runtime(runtime_config(m_config)) {
     m_device = open_device(m_config, m_window);
     std::println("render: {} — {} ({})", to_string(m_device->backend()), m_device->info().device_name, m_device->info().api_version);
     auto renderer = Renderer2D::create(*m_device);
@@ -90,11 +95,11 @@ App::App(AppConfig config)
     load_ui_fonts();
 
     // Модуль платформы: мост «колбэки окна → события шины».
-    m_platform = m_bus.declare_module("Platform")
+    m_platform = m_runtime.bus().declare_module("Platform")
                      .produces<KeyEvent>(es::ChannelConfig{.reserve = 64, .max_events_per_tick = 1024})
                      .produces<MouseButtonEvent>(es::ChannelConfig{.reserve = 64, .max_events_per_tick = 1024});
-    m_key_out = m_bus.writer<KeyEvent>(m_platform);
-    m_mouse_out = m_bus.writer<MouseButtonEvent>(m_platform);
+    m_key_out = m_runtime.bus().writer<KeyEvent>(m_platform);
+    m_mouse_out = m_runtime.bus().writer<MouseButtonEvent>(m_platform);
 
     m_window.events().key.subscribe([this](int key, int action) { on_key(key, action); });
     // Кнопки мыши — подпиской, как и клавиши: каждое нажатие и отпускание попадает в шину по порядку,
@@ -127,14 +132,14 @@ void App::on_key(int key, int action) {
         return;
     }
     if (key == m_config.pause_key) {
-        m_step.paused = !m_step.paused;
+        m_runtime.step().paused = !m_runtime.step().paused;
         return;
     }
     switch (key) {
         case GLFW_KEY_EQUAL:
-        case GLFW_KEY_KP_ADD: m_step.speed = std::min(m_step.speed * 2, 8); break;
+        case GLFW_KEY_KP_ADD: m_runtime.step().speed = std::min(m_runtime.step().speed * 2, 8); break;
         case GLFW_KEY_MINUS:
-        case GLFW_KEY_KP_SUBTRACT: m_step.speed = std::max(m_step.speed / 2, 1); break;
+        case GLFW_KEY_KP_SUBTRACT: m_runtime.step().speed = std::max(m_runtime.step().speed / 2, 1); break;
         case GLFW_KEY_F1: print_event_report(); break;
         case GLFW_KEY_ESCAPE: m_window.request_close(); break;
         default: break;
@@ -173,18 +178,70 @@ void App::poll_input(float frame_seconds) {
     }
 }
 
+namespace {
+
+/// Завершение при любом выходе из App::run, в том числе по исключению: GPU дочитывает кадр, игра и модули
+/// освобождают ресурсы (в обратном порядке создания). До этого ресурсы игры могли остаться под работающим GPU.
+class RunScope {
+public:
+    RunScope(App& app, Game& game) noexcept : m_app(app), m_game(game) {}
+    RunScope(const RunScope&) = delete;
+    RunScope& operator=(const RunScope&) = delete;
+
+    void game_ready() noexcept { m_game_ready = true; }
+
+    void finish() noexcept {
+        if (m_finished) return;
+        m_finished = true;
+        try {
+            m_app.device().wait_idle(); // ресурсы игры можно освобождать: GPU их больше не читает
+        } catch (const std::exception& error) {
+            std::println(stderr, "wait_idle: {}", error.what());
+        }
+        if (m_game_ready) {
+            try {
+                m_game.shutdown(m_app);
+            } catch (const std::exception& error) {
+                std::println(stderr, "Game::shutdown: {}", error.what());
+            }
+        }
+        m_app.runtime().set_tick_callback({}); // игра уходит со стека run(): обратный вызов на неё больше не нужен
+        m_app.runtime().shutdown(); // модули — после игры, в обратном порядке инициализации
+    }
+
+    ~RunScope() { finish(); }
+
+private:
+    App& m_app;
+    Game& m_game;
+    bool m_game_ready = false;
+    bool m_finished = false;
+};
+
+} // namespace
+
 int App::run(Game& game) {
+    RunScope scope(*this, game);
+    game.configure(*this);
+    m_runtime.initialize(); // порядок по зависимостям; при сбое уже поднятые модули откатываются
     game.setup(*this);
+    scope.game_ready();
+    m_runtime.set_tick_callback([this, &game](RuntimeSystem::Runtime&) { game.tick(*this); });
 
     // Контракты модулей известны после setup — показываем граф сразу.
-    const es::EventGraph graph = m_bus.build_graph();
+    const es::EventGraph graph = m_runtime.bus().build_graph();
     std::println("===== {} : event graph =====\n{}", m_config.title, graph.to_text());
     std::string dot_name = m_config.title;
     std::ranges::replace(dot_name, ' ', '_');
     dot_name += "_events.dot";
     std::ofstream(dot_name) << graph.to_dot();
     std::println("graph written to {} (dot -Tsvg {} -o graph.svg)", dot_name, dot_name);
-    std::println("job threads: {} background + main (--threads N)\n", m_jobs.threads());
+    std::println("job threads: {} background + main (--threads N)", m_runtime.jobs().threads());
+    {
+        std::string order;
+        for (const std::string_view name : m_runtime.initialization_order()) order += std::format(" {}", name);
+        std::println("modules:{}\n", order.empty() ? " (none)" : order);
+    }
 
     WindowSystem::Size fb = m_window.framebuffer_size();
     int fb_w = fb.width;
@@ -200,7 +257,6 @@ int App::run(Game& game) {
 
     for (int frame = 0; !m_window.should_close(); ++frame) {
         m_window.poll_events(); // ввод этого кадра: InputState + подписчики (клавиши → шина)
-        m_frame_memory.reset();
         const double now = WindowSystem::Window::time();
         const double frame_dt = std::min(now - last, 0.25);
         last = now;
@@ -211,18 +267,14 @@ int App::run(Game& game) {
         m_camera.viewport = {static_cast<float>(std::max(fb_w, 1)), static_cast<float>(std::max(fb_h, 1))};
         poll_input(static_cast<float>(frame_dt));
         const bool drawable = m_device->begin_frame(fb_w, fb_h); // до Game::frame: игра может рисовать в текстуры
+        m_runtime.begin_frame(frame_dt); // арена кадра сброшена, Module::frame вызван — до Game::frame
         game.frame(*this, static_cast<float>(frame_dt));
-        m_bus.advance_frame(); // каналы домена Frame (интерфейс, ввод): живут и на паузе, когда тиков нет
 
-        // --- симуляция
-        for (int steps = m_step.advance(frame_dt); steps > 0; --steps) {
-            game.tick(*this);
-            m_bus.advance_tick();
-            m_tick_memory.swap(); // память тика N доступна в N+1 как previous, затем очищается
-        }
+        // --- симуляция: advance_frame (домен Frame живёт и на паузе), затем тики: модули → Game::tick → advance_tick
+        m_runtime.update(frame_dt);
 
         const bool last_frame = (m_config.max_frames >= 0 && frame + 1 >= m_config.max_frames) ||
-                                (m_config.max_ticks >= 0 && m_bus.current_tick() >= static_cast<es::Tick>(m_config.max_ticks));
+                                (m_config.max_ticks >= 0 && m_runtime.current_tick() >= static_cast<es::Tick>(m_config.max_ticks));
 
         // --- отрисовка
         if (drawable) {
@@ -258,9 +310,8 @@ int App::run(Game& game) {
         }
     }
 
-    m_device->wait_idle(); // ресурсы игры можно освобождать: GPU их больше не читает
-    game.shutdown(*this);
-    std::println("\n===== {} : finished at tick {} =====", m_config.title, m_bus.current_tick());
+    scope.finish(); // wait_idle → Game::shutdown → модули в обратном порядке
+    std::println("\n===== {} : finished at tick {} =====", m_config.title, m_runtime.current_tick());
     print_event_report();
     return 0;
 }
@@ -274,10 +325,10 @@ void App::draw_bus_overlay() {
                                  Color::from_rgba(0xFFB74DFF), Color::from_rgba(0xBA68C8FF),
                                  Color::from_rgba(0xE57373FF), Color::from_rgba(0xFFF176FF)};
 
-    const float width = static_cast<float>(m_bus.channel_count()) * 14.0f + 8.0f;
+    const float width = static_cast<float>(m_runtime.bus().channel_count()) * 14.0f + 8.0f;
     r.fill_rect({{4.0f, base - 90.0f}, {width, 96.0f}}, Color{0, 0, 0, 150}, 0);
-    for (std::size_t i = 0; i < m_bus.channel_count(); ++i) {
-        const es::ChannelStats stats = m_bus.channel_at(i).stats();
+    for (std::size_t i = 0; i < m_runtime.bus().channel_count(); ++i) {
+        const es::ChannelStats stats = m_runtime.bus().channel_at(i).stats();
         const float height = 3.0f + 10.0f * std::log2(1.0f + static_cast<float>(stats.readable));
         const float x = 10.0f + static_cast<float>(i) * 14.0f;
         r.fill_rect({{x, base - height}, {10.0f, height}}, palette[i % std::size(palette)], 1);
@@ -288,11 +339,11 @@ void App::draw_bus_overlay() {
 
     // Пауза и скорость — справа сверху.
     const float right = m_camera.viewport.x - 12.0f;
-    if (m_step.paused) {
+    if (m_runtime.step().paused) {
         r.fill_rect({{right - 26.0f, 12.0f}, {9.0f, 28.0f}}, Colors::white, 3);
         r.fill_rect({{right - 11.0f, 12.0f}, {9.0f, 28.0f}}, Colors::white, 3);
     } else {
-        for (int i = 0; i < m_step.speed; ++i) {
+        for (int i = 0; i < m_runtime.step().speed; ++i) {
             r.fill_rect({{right - 10.0f - static_cast<float>(i) * 12.0f, 12.0f}, {8.0f, 16.0f}}, Colors::yellow, 3);
         }
     }
@@ -323,23 +374,23 @@ void App::save_screenshot(int /*width*/, int /*height*/) const {
 
 void App::update_title(Game& game, double fps) {
     const std::string title =
-        std::format("{} | tick {} | {} | {:.0f} fps | {} draw calls | {}", m_config.title, m_bus.current_tick(),
-                    m_step.paused ? "PAUSED" : std::format("x{}", m_step.speed), fps,
+        std::format("{} | tick {} | {} | {:.0f} fps | {} draw calls | {}", m_config.title, m_runtime.bus().current_tick(),
+                    m_runtime.step().paused ? "PAUSED" : std::format("x{}", m_runtime.step().speed), fps,
                     m_renderer->last_stats().draw_calls + m_renderer3d->last_stats().draws, game.status());
     m_window.set_title(title);
 }
 
 void App::print_event_report() const {
-    const es::EventGraph graph = m_bus.build_graph();
+    const es::EventGraph graph = m_runtime.bus().build_graph();
     std::println("{}", graph.to_text());
 
     const es::ModuleOrder order = graph.module_order();
     std::print("module order:");
     for (const es::ModuleId id : order.order) {
-        std::print(" {}", m_bus.modules().info(id).name);
+        std::print(" {}", m_runtime.bus().modules().info(id).name);
     }
     for (const es::ModuleId id : order.cyclic) {
-        std::print(" [cycle: {}]", m_bus.modules().info(id).name);
+        std::print(" [cycle: {}]", m_runtime.bus().modules().info(id).name);
     }
     std::println("");
 
@@ -352,8 +403,8 @@ void App::print_event_report() const {
 
     std::println("memory by tag (MemorySystem::memory_report):\n{}", MemorySystem::memory_report());
     std::println("{:<28} {:>12} {:>10} {:>10} {:>12}", "channel", "emitted", "peak/tick", "dropped", "memory");
-    for (std::size_t i = 0; i < m_bus.channel_count(); ++i) {
-        const es::IChannel& channel = m_bus.channel_at(i);
+    for (std::size_t i = 0; i < m_runtime.bus().channel_count(); ++i) {
+        const es::IChannel& channel = m_runtime.bus().channel_at(i);
         const es::ChannelStats s = channel.stats();
         std::println("{:<28} {:>12} {:>10} {:>10} {:>10} KB", channel.name(), s.total_emitted, s.peak_per_tick,
                      s.total_dropped, s.allocated_bytes / 1024);
