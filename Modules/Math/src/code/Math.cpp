@@ -1,6 +1,7 @@
 #include <Math/Math.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 
@@ -122,5 +123,28 @@ std::optional<RayHit> raycast(const SdfField& field, WorldPos origin, FVec3 dir,
 }
 
 Fixed SphereSdf::sample(WorldPos pos) const noexcept { return distance(pos, centre) - radius; }
+
+} // namespace Math
+
+namespace Math {
+
+namespace {
+constexpr std::array<std::uint32_t, 256> make_crc32c_table() {
+    std::array<std::uint32_t, 256> table{};
+    for (std::uint32_t i = 0; i < 256; ++i) {
+        std::uint32_t crc = i;
+        for (int bit = 0; bit < 8; ++bit) crc = (crc & 1u) ? (crc >> 1) ^ 0x82F63B78u : crc >> 1; // отражённый полином Кастаньоли
+        table[i] = crc;
+    }
+    return table;
+}
+constexpr std::array<std::uint32_t, 256> crc32c_table = make_crc32c_table();
+} // namespace
+
+std::uint32_t crc32c(std::span<const std::byte> bytes, std::uint32_t seed) noexcept {
+    std::uint32_t crc = ~seed;
+    for (const std::byte b : bytes) crc = crc32c_table[(crc ^ static_cast<std::uint8_t>(b)) & 0xFFu] ^ (crc >> 8);
+    return ~crc;
+}
 
 } // namespace Math

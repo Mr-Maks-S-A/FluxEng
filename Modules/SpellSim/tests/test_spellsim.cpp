@@ -248,13 +248,13 @@ TEST_CASE("другой сид даёт другой мир, но те же ко
 #define FLUX_SLOW_BUILD 1
 #endif
 
-TEST_CASE("фазы тика укладываются в бюджет 4 мс" * doctest::skip(
 #ifdef FLUX_SLOW_BUILD
-                                                 true
+constexpr bool slow_build = true;
 #else
-                                                 false
+constexpr bool slow_build = false;
 #endif
-                                                 )) {
+
+TEST_CASE("фазы тика укладываются в бюджет 4 мс" * doctest::skip(slow_build)) {
     Rig rig;
     rig.run(120);
     double worst = 0;

@@ -3,6 +3,8 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <cstring>
+#include <vector>
 #include <set>
 
 using namespace Math;
@@ -141,4 +143,22 @@ TEST_CASE("Sdf: плоскость и шар, градиент по умолча
     CHECK(up.y.to_double() == doctest::Approx(1.0).epsilon(0.01));
     const FVec3 side = planet.gradient(WorldPos::from_meters(101, 0, 0));
     CHECK(side.x.to_double() == doctest::Approx(1.0).epsilon(0.01));
+}
+
+TEST_CASE("CRC-32C: контрольный вектор, по частям, чувствительность к одному биту") {
+    const auto bytes = [](const char* text) { return std::as_bytes(std::span<const char>(text, std::strlen(text))); };
+    CHECK(crc32c(bytes("123456789")) == 0xE3069283u); // общепринятый контрольный вектор CRC-32C
+    CHECK(crc32c({}) == 0u);
+    const auto part_a = bytes("1234"), part_b = bytes("56789");
+    CHECK(crc32c(part_b, crc32c(part_a)) == 0xE3069283u); // считается по частям
+    std::vector<std::byte> data(1000);
+    Rng rng(3);
+    for (std::byte& b : data) b = static_cast<std::byte>(rng.next_u32());
+    const std::uint32_t original = crc32c(data);
+    for (std::size_t i = 0; i < data.size(); i += 97) {
+        data[i] ^= std::byte{0x10};
+        CHECK(crc32c(data) != original); // один испорченный бит всегда виден
+        data[i] ^= std::byte{0x10};
+    }
+    CHECK(crc32c(data) == original);
 }

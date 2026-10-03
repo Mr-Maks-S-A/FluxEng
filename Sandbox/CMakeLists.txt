@@ -47,7 +47,8 @@ foreach(game IN ITEMS FallingSand Colony Ecosystem Swarm Siege Voxel CardDuel Ru
 endforeach()
 
 # FirstSpell: пре-альфа «Первое заклинание» — вся логика в модулях SpellSim / Replay / WorldRender.
-target_link_libraries(FirstSpell PRIVATE engine::SpellSim engine::Replay engine::WorldRenderTerrain)
+# Игре достаточно одной зонтичной цели (engine::FluxEng = Gameplay + Presentation; см. Modules/CMakeLists.txt).
+target_link_libraries(FirstSpell PRIVATE engine::FluxEng)
 # ReplayTool: просмотр и сравнение записей (файл самоописываем — нужен только Replay).
 add_executable(ReplayTool first_spell/replay_tool.cpp)
 target_link_libraries(ReplayTool PRIVATE engine::Replay SandboxWarnings)
