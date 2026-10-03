@@ -48,12 +48,11 @@ static Replay::StateHashes run(std::uint32_t ticks, Replay::Session& session, st
 }
 
 int main() {
-    // 1. Один прогон. Хеши: ландшафт, поле маны, ECS (персонаж, заклинания, генератор, номер тика).
+    // 1. Один прогон. Хеши названы по подсистемам: terrain, mana, characters, spells, rng, tick.
     Replay::Session off = Replay::Session::off(11);
     std::uint32_t edits = 0;
     const Replay::StateHashes first = run(300, off, &edits);
-    std::printf("1. 300 тиков: правок ландшафта %u, хеши %016llx %016llx %016llx\n", edits, static_cast<unsigned long long>(first.value[0]),
-                static_cast<unsigned long long>(first.value[1]), static_cast<unsigned long long>(first.value[2]));
+    std::printf("1. 300 тиков: правок ландшафта %u\n   хеши подсистем: %s\n", edits, first.describe().c_str());
     EXPECT(edits == 2);
 
     // 2. Тот же сценарий ещё раз — хеши те же (детерминизм).
@@ -66,7 +65,7 @@ int main() {
     register_commands(registry); // схемы команд попадут в файл записи
     const std::string path = "headless_example.rec";
     {
-        Replay::Session record = Replay::Session::record(11, path, &registry);
+        Replay::Session record = Replay::Session::record(11, path, &registry).value();
         const Replay::StateHashes recorded = run(300, record);
         EXPECT(record.finish(300, recorded).has_value());
     }

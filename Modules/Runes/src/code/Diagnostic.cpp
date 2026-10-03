@@ -33,6 +33,8 @@ std::string_view code_name(Code code) noexcept {
     case Code::UnknownKeyword: return "unknown_keyword";
     case Code::BadField: return "bad_field";
     case Code::DuplicateNode: return "duplicate_node";
+    case Code::UnreachableNode: return "unreachable_node";
+    case Code::UnusedValue: return "unused_value";
     }
     return "?";
 }
@@ -68,6 +70,8 @@ std::string Diagnostic::message() const {
     case Code::UnknownKeyword: return "неизвестная строка: " + detail;
     case Code::BadField: return detail;
     case Code::DuplicateNode: return "повторный номер узла " + detail;
+    case Code::UnreachableNode: return "оператор недостижим от входа графа: его никто не вызывает";
+    case Code::UnusedValue: return "значение не используется";
     }
     return {};
 }

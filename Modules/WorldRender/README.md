@@ -33,6 +33,7 @@ fog_view.draw(fog, view);                                  // билборды: 
 | `FogView`, `build_fog_vertices` | туман из ячеек; выбор ячеек — чистая функция, тестируется без GPU |
 | `CameraRig` | следящая камера (не заходит в поверхность) и свободная; `View` — глаз `dvec3` и относительная `Camera3D` |
 | `DebugDraw`, `LineRenderer` | линии, рамки, кресты; накапливаются за кадр |
+| `HeightMap`, `TerrainHeights` | карта высот для вида сверху: частичное обновление по чанкам, раскраска рельефа в `Image` (под `Renderer2D::update_texture`) |
 | `overlay::` | панель текста, полоса, прицел, тепловая карта, сглаживание `Smoothed` |
 
 Примеры: `01_data_sources.cpp` (без GPU: свои источники, очередь, туман, камеры), `02_render_terrain_png.cpp` (весь кадр в PNG

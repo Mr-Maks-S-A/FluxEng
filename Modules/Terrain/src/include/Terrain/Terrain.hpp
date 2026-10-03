@@ -144,6 +144,14 @@ public:
     /// @brief Насыпать сферу: d = min(d, s), материал — порода.
     EditResult add_sphere(Math::WorldPos center, Math::Fixed radius);
 
+    /**
+     * @brief Подменяет данные чанка целиком (загрузка снимка сохранения).
+     * Версия чанка растёт, а он и все соседи, читающие его край (до 27 чанков), ставятся в очередь на перестройку сетки.
+     */
+    void load_chunk(ChunkCoord c, const Chunk& data);
+    /// @brief Менялся ли чанк с момента генерации (правкой или загрузкой): именно такие чанки нужны снимку, остальные воспроизводятся из источника.
+    [[nodiscard]] bool modified(ChunkCoord c) const noexcept { return version(c) > 1; }
+
     /// @brief Хеш всех отсчётов (пересчитываются только изменённые чанки).
     [[nodiscard]] std::uint64_t hash() const;
 

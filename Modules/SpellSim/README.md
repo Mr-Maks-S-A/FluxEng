@@ -23,7 +23,7 @@ SpellSim::Simulation sim(SpellSim::Config{.seed = 11});
 sim.programs().add_text("carve", "TARGET\nPUSH 2\nCARVE\nHALT\n");
 Replay::Driver driver(sim, session, &flight);                      // Simulation — это Replay::Simulatable
 driver.step({SpellSim::CastCommand{0, Runes::ManaSource::Personal, aim}.encode()});
-Replay::StateHashes h = sim.hashes();                              // ландшафт, мана, ECS (персонаж, заклинания, Rng, тик)
+Replay::StateHashes h = sim.hashes();                              // по именам: terrain, mana, characters, spells, rng, tick
 ```
 
 ## Состояние наружу — только для чтения
@@ -31,6 +31,13 @@ Replay::StateHashes h = sim.hashes();                              // ландш
 `terrain()`, `mana()`, `world()`, `spells()` — `const`: изменить мир мимо команд нельзя, поэтому запись всегда воспроизводима.
 «Двери»: команды в `tick`, `take_dirty_chunks()` (очередь на перестройку мешей), `reload_spells`, `programs()`, `set_grimoire_slot`.
 События шины: `TerrainEditedEvent` (границы правки), `Runes::SpellFailedEvent`, `SpellFinishedEvent`.
+
+## Эталонные записи (golden)
+
+`tests/golden/*.rec` — короткие записи сценариев с хешами каждой подсистемы на последнем тике, закоммиченные в репозиторий. Тест `Golden`
+воспроизводит их и требует тех же хешей — **в любой сборке** (gcc и clang, Release и Debug дают одно и то же: проверено). Так потеря
+детерминизма ловится сразу, с названием разошедшейся подсистемы. Если поведение изменено намеренно: `tools/update_golden.sh`
+(`FLUX_UPDATE_GOLDEN=1`), новые файлы коммитятся вместе с изменением.
 
 Пример — `examples/01_headless_simulation.cpp` (прогон, детерминизм, запись и повтор, своя фаза). Тесты: `SpellSimTests`
 (порядок тика, оба заклинания, дыра в тумане 5–10 с, бесконечный цикл, повтор с тем же хешем).

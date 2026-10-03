@@ -356,3 +356,17 @@ TEST_CASE("свойство: при любом разрушении читате
         REQUIRE(read->report.records + read->report.records_lost <= 250);
     }
 }
+
+TEST_CASE("block_offset: раскладка совпадает с реальным файлом (по ней можно портить конкретные блоки)") {
+    MemoryStorage storage;
+    fill(storage, 100);
+    const std::uint64_t stripes = verify(storage)->stripes;
+    CHECK(storage.bytes().size() == block_offset(small, stripes, 0)); // конец файла = начало несуществующей следующей полосы
+    CHECK(block_offset(small, 0, 0) == 64);
+    CHECK(block_offset(small, 2, 3) == base + 2 * stripe_size + 3 * wire);
+    CHECK(block_wire_size(small) == wire);
+    storage.bytes()[block_offset(small, 1, 2) + 20] ^= std::byte{0xFF};
+    const auto report = verify(storage).value();
+    CHECK(report.blocks_corrupt == 1);
+    CHECK(report.stripes_damaged == 1);
+}

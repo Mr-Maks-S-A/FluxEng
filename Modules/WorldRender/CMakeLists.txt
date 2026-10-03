@@ -27,6 +27,7 @@ add_library(WorldRender STATIC
     src/code/TerrainView.cpp
     src/code/FogView.cpp
     src/code/DebugDraw.cpp
+    src/code/HeightMap.cpp
 )
 add_library(engine::WorldRender ALIAS WorldRender)
 target_include_directories(WorldRender PUBLIC

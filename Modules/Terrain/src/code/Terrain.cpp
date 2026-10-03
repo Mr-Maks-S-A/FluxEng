@@ -190,6 +190,19 @@ EditResult SdfWorld::edit(WorldPos center, Fixed radius, bool carve) {
 EditResult SdfWorld::carve_sphere(WorldPos center, Fixed radius) { return edit(center, radius, true); }
 EditResult SdfWorld::add_sphere(WorldPos center, Fixed radius) { return edit(center, radius, false); }
 
+void SdfWorld::load_chunk(ChunkCoord c, const Chunk& data) {
+    FLUX_ASSERT(m_layout.contains(c), "SdfWorld::load_chunk: чанк вне мира");
+    const auto i = static_cast<std::size_t>(m_layout.index(c));
+    *m_chunks[i] = data;
+    ++m_versions[i];
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const ChunkCoord n{c.x + dx, c.y + dy, c.z + dz};
+                if (m_layout.contains(n)) mark_dirty(n); // сетка соседа читает край этого чанка
+            }
+}
+
 std::uint64_t SdfWorld::hash() const {
     Math::Hasher total;
     for (std::size_t i = 0; i < m_chunks.size(); ++i) {

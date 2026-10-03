@@ -66,10 +66,10 @@ Replay::StateHashes play(Replay::Session& session, std::uint32_t ticks, std::uin
 TEST_CASE("порядок тика: правка ландшафта применяется в том же тике, что и каст") {
     Rig rig;
     rig.run(120); // персонаж встал на землю
-    const auto before = rig.sim.hashes().value[0];
+    const auto before = rig.sim.hashes().at("terrain");
     const Replay::Command cast = cast_command(0, Runes::ManaSource::Personal, look_down);
     rig.sim.tick(std::span<const Replay::Command>(&cast, 1));
-    CHECK(rig.sim.hashes().value[0] != before);
+    CHECK(rig.sim.hashes().at("terrain") != before);
     CHECK(rig.sim.edits_applied() == 1);
 }
 
@@ -211,7 +211,7 @@ TEST_CASE("запись команд, проигранная повторно, �
     constexpr std::uint32_t ticks = 1200;
     Replay::StateHashes recorded;
     {
-        Replay::Session rec = Replay::Session::record(11, path);
+        Replay::Session rec = Replay::Session::record(11, path).value();
         recorded = play(rec, ticks, 11);
         REQUIRE(rec.finish(ticks, recorded).has_value());
     }
@@ -224,8 +224,8 @@ TEST_CASE("запись команд, проигранная повторно, �
     const auto verdict = replay->finish(ticks, replayed);
     REQUIRE(verdict.has_value());
     CHECK((verdict->checked && verdict->match));
-    CHECK(recorded.value[0] != Rig(11).sim.hashes().value[0]); // мир действительно менялся
-    CHECK(recorded.value[1] != Rig(11).sim.hashes().value[1]);
+    CHECK(recorded.at("terrain") != Rig(11).sim.hashes().at("terrain")); // мир действительно менялся
+    CHECK(recorded.at("mana") != Rig(11).sim.hashes().at("mana"));
     std::filesystem::remove(path);
 }
 
@@ -233,7 +233,7 @@ TEST_CASE("другой сид даёт другой мир, но те же ко
     Replay::Session a = Replay::Session::off(1), b = Replay::Session::off(2), a2 = Replay::Session::off(1);
     const auto ha = play(a, 600, 1), hb = play(b, 600, 2), ha2 = play(a2, 600, 1);
     CHECK(ha == ha2);
-    CHECK(ha.value[0] != hb.value[0]);
+    CHECK(ha.at("terrain") != hb.at("terrain"));
 }
 
 // Бюджет измеряется только в оптимизированной сборке без санитайзеров (они замедляют код в разы).
@@ -300,13 +300,13 @@ TEST_CASE("выключенная фаза mana: поле не шагает, о�
     rig.run(60);
     const Replay::Command a = cast_command(1, Runes::ManaSource::Ambient, look_down);
     rig.sim.tick(std::span<const Replay::Command>(&a, 1));
-    const auto hash_before = rig.sim.hashes().value[1];
+    const auto hash_before = rig.sim.hashes().at("mana");
     REQUIRE(rig.sim.schedule().set_enabled("mana", false));
     rig.run(60);
-    CHECK(rig.sim.hashes().value[1] == hash_before); // поле заморожено
+    CHECK(rig.sim.hashes().at("mana") == hash_before); // поле заморожено
     rig.sim.schedule().set_enabled("mana", true);
     rig.run(60);
-    CHECK(rig.sim.hashes().value[1] != hash_before);
+    CHECK(rig.sim.hashes().at("mana") != hash_before);
 }
 
 TEST_CASE("типизированные команды: encode и decode туда-обратно, схемы зарегистрированы") {

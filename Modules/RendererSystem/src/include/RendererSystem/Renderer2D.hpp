@@ -99,6 +99,12 @@ public:
                                                                          const TextureDesc& desc = {});
 
     /**
+     * @brief Заменяет пиксели существующей текстуры (размер тот же): живые карты, мини-карта, тепловые слои.
+     * @throws RendererError Дескриптор не из этого рендера или размер отличается.
+     */
+    void update_texture(TextureHandle handle, const Image& image);
+
+    /**
      * @brief Текстура по дескриптору.
      * @throws RendererError Дескриптор не из этого рендера.
      */

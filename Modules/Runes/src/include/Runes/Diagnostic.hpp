@@ -51,6 +51,9 @@ enum class Code : std::uint8_t {
     UnknownKeyword,    ///< detail: слово.
     BadField,          ///< detail: описание.
     DuplicateNode,     ///< detail: номер.
+    // предупреждения анализа графа (редактор): граф компилируется, но узел бесполезен
+    UnreachableNode,   ///< Оператор недостижим от entry.
+    UnusedValue,       ///< Значение никто не использует.
 };
 
 /// @brief Стабильное имя кода (для логов и сериализации), например «unknown_rune».

@@ -165,3 +165,41 @@ TEST_CASE("туман: дыра в источнике видна как пров
     for (const FogVertex& v : vertices) dimmest = std::min(dimmest, v.density);
     CHECK(dimmest == doctest::Approx(0.2f));
 }
+
+namespace {
+struct Slope final : WorldRender::HeightSource {
+    [[nodiscard]] double height_at(double x, double z) const override { return z > 6.0 ? std::numeric_limits<double>::quiet_NaN() : x * 0.5; }
+};
+} // namespace
+
+TEST_CASE("HeightMap: сэмплирование, пустые клетки и частичное обновление") {
+    WorldRender::HeightMap map(8, 8, 1.0);
+    Slope source;
+    CHECK(std::isnan(map.height(0, 0))); // до первого update — пусто
+    map.update(source);
+    CHECK(map.height(2, 0) == doctest::Approx(1.25f));
+    CHECK(std::isnan(map.height(0, 7)));
+    CHECK(map.height_at(2.5, 3.0) == doctest::Approx(1.25).epsilon(0.05));
+    CHECK(map.update(source, {6, 6, 100, 100}) == 4); // обрезается по карте
+    CHECK(map.cells_of(2.0, 2.0, 2.0).x1 == 4);
+}
+
+TEST_CASE("HeightMap: раскраска светлее на склонах к солнцу и тёмная пустота") {
+    WorldRender::HeightMap map(8, 8, 1.0);
+    Slope source;
+    map.update(source);
+    const RendererSystem::Image img = map.shade();
+    CHECK(img.width() == 8);
+    CHECK(img.pixel(3, 3).a == 255);
+    CHECK(img.pixel(3, 7).r < 30); // нет поверхности — фон
+}
+
+TEST_CASE("HeightMap: диапазон высот для раскраски") {
+    WorldRender::HeightMap map(8, 8, 1.0);
+    CHECK(map.range().first == 0.0); // пустая карта
+    Slope source;
+    map.update(source);
+    const auto [lo, hi] = map.range();
+    CHECK(lo == doctest::Approx(0.25));
+    CHECK(hi == doctest::Approx(3.75));
+}

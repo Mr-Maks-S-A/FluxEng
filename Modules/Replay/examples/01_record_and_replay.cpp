@@ -32,10 +32,13 @@ struct Counter {
         ++ticks;
     }
     std::uint32_t tick_number() const { return ticks; }
-    Replay::StateHashes hashes() const {
-        Math::Hasher h;
-        h.add_signed(sum);
-        return {{h.value(), 0, 0}};
+    Replay::StateHashes hashes() const { // хеши названы по подсистемам: при расхождении видно, какая разошлась
+        Math::Hasher total, ticks_hash;
+        total.add_signed(sum);
+        ticks_hash.add(ticks);
+        Replay::StateHashes h;
+        h.add("sum", total.value()).add("ticks", ticks_hash.value());
+        return h;
     }
 };
 static_assert(Replay::Simulatable<Counter>);
@@ -51,7 +54,8 @@ int main() {
     Replay::StateHashes recorded;
     {
         Counter sim;
-        Replay::Session session = Replay::Session::record(/*seed=*/7, file, &registry);
+        // Запись идёт по ходу игры в файл-журнал с избыточностью (сброс на диск раз в секунду симуляции).
+        Replay::Session session = Replay::Session::record(/*seed=*/7, file, &registry).value();
         Replay::FlightRecorder flight(8); // последние 8 тиков: при сбое их сбросит FLUX_ASSERT (install_assert_dump)
         Replay::Driver driver(sim, session, &flight);
         for (int t = 0; t < 100; ++t) {
@@ -85,10 +89,10 @@ int main() {
     EXPECT(recording.has_value());
     std::printf("3. содержимое:\n%s", Replay::inspect(*recording, 4).c_str());
 
-    Replay::Recording edited = *recording; // «другой» прогон: сдвинем сумму в хеше
-    edited.final_hashes.value[0] ^= 1;
+    Replay::Recording edited = *recording; // «другой» прогон: у него разошёлся хеш подсистемы «sum»
+    edited.final_hashes = Replay::StateHashes{}.add("sum", recording->final_hashes.at("sum") ^ 1).add("ticks", recording->final_hashes.at("ticks"));
     const auto difference = Replay::diff(*recording, edited);
-    EXPECT(difference.has_value());
+    EXPECT(difference.has_value() && difference->text.find("sum") != std::string::npos); // названа разошедшаяся подсистема
     std::printf("4. сравнение с испорченной копией: %s\n", difference->text.c_str());
     EXPECT(!Replay::diff(*recording, *recording).has_value());
 

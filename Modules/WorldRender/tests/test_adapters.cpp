@@ -85,3 +85,21 @@ TEST_CASE("слой тумана настраивается: выше порог
     CHECK(thin.density(cx, cell_above(20.0), cz) == 0.0f);
     CHECK(thick.density(cx, cell_above(-12.0), cz) == 0.0f); // глубоко в породе
 }
+
+TEST_CASE("TerrainHeights: карта высот совпадает с ground_height и обновляется по чанку") {
+    Terrain::SdfWorld world(1);
+    WorldRender::TerrainHeights source(world);
+    WorldRender::HeightMap map(128, 128, 1.0);
+    map.update(source);
+    const double h = map.height_at(40.0, 40.0);
+    CHECK_FALSE(std::isnan(h));
+    CHECK(h == doctest::Approx(source.height_at(40.5, 40.5)).epsilon(0.2));
+    // правка в одном чанке: пересчитывается только его прямоугольник
+    const WorldRender::CellRegion region = WorldRender::TerrainHeights::cells_of_chunk({2, 1, 2}, map);
+    CHECK(region.x0 == 32);
+    CHECK(region.x1 == 48);
+    CHECK(map.update(source, region) == 16 * 16);
+    const RendererSystem::Image picture = map.shade();
+    CHECK(picture.width() == 128);
+    CHECK(picture.pixel(64, 64).a == 255);
+}

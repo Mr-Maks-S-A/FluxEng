@@ -53,6 +53,17 @@ struct Tuning {
 
 enum class ManaSource : std::uint8_t { Personal, Ambient };
 
+/// @brief Статическая оценка стоимости программы (до запуска): по ней редактор показывает «сколько это стоит».
+struct CostEstimate {
+    Math::Mana per_pass{};   ///< Верхняя оценка одного прохода: сумма цен всех рун (ветки складываются), эффекты — `k·r³` по известному радиусу.
+    int runes = 0;           ///< Рун в программе.
+    int effects = 0;         ///< Рун-эффектов (CARVE, RAISE).
+    bool exact = true;       ///< Радиусы всех эффектов — константы (иначе цена эффектов занижена: радиус известен только при запуске).
+    bool loops = false;      ///< Есть переход назад: полная цена — за все проходы, пока хватает маны.
+};
+/// @brief Оценивает стоимость программы по `Tuning`: константы протаскиваются через PUSH/ADD/MUL, чтобы знать радиус эффекта.
+[[nodiscard]] CostEstimate estimate_cost(const Program& program, const Tuning& tuning = {});
+
 enum class Failure : std::uint8_t { None, StackUnderflow, StackOverflow, JumpOutOfRange, OutOfMana, OutOfBudget, UnknownRune };
 [[nodiscard]] std::string_view failure_text(Failure failure) noexcept;
 
@@ -164,6 +175,8 @@ public:
 
     /// @brief (Пере)читает каталог. Без перезапуска: идущие заклинания держат старые программы.
     Report load_directory(const std::filesystem::path& directory);
+    /// @brief Добавляет готовую программу (например, собранную из графа в редакторе); существующая с тем же именем заменяется.
+    void add_program(std::string name, Program program);
     /// @brief Добавляет программу из текста (тесты, встроенные заклинания).
     [[nodiscard]] std::expected<void, Diagnostic> add_text(std::string name, std::string_view text);
 

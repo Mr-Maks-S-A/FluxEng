@@ -1,0 +1,6 @@
+entry 4
+node 1 CASTER at 40 20
+node 2 PUSH value 4 at 40 110
+node 3 PUSH value 300 at 40 190
+node 4 DRAW in 1 2 3 next 5 at 230 80
+node 5 HALT at 400 80

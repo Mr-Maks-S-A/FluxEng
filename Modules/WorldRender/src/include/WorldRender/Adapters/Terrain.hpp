@@ -15,12 +15,14 @@
  * @endcode
  */
 
+#include <WorldRender/HeightMap.hpp>
 #include <WorldRender/Sources.hpp>
 
 #include <ManaField/ManaField.hpp>
 #include <Terrain/Mesher.hpp>
 
 #include <cstring>
+#include <limits>
 #include <span>
 
 namespace WorldRender {
@@ -50,6 +52,26 @@ public:
         out.reserve(chunks.size());
         for (const Terrain::ChunkCoord c : chunks) out.push_back({c.x, c.y, c.z});
         return out;
+    }
+
+private:
+    const Terrain::SdfWorld* m_world;
+};
+
+/// @brief Высоты ландшафта для карты сверху: первая порода под колонкой (`SdfWorld::ground_height`). Пустой столбец — `NaN`.
+class TerrainHeights final : public HeightSource {
+public:
+    explicit TerrainHeights(const Terrain::SdfWorld& world) : m_world(&world) {}
+
+    [[nodiscard]] double height_at(double x, double z) const override {
+        const std::int64_t h = m_world->ground_height(Math::WorldPos::from_doubles(x, 0.0, z));
+        return h == 0 ? std::numeric_limits<double>::quiet_NaN() : static_cast<double>(h) / static_cast<double>(Math::Fixed::one_raw);
+    }
+
+    /// @brief Клетки карты под чанком ландшафта (чанк целиком по высоте: правка в любом слое меняет колонку).
+    [[nodiscard]] static CellRegion cells_of_chunk(Terrain::ChunkCoord chunk, const HeightMap& map) {
+        const double size = Terrain::chunk_size * 0.5;
+        return map.cells_of(chunk.x * size, chunk.z * size, size);
     }
 
 private:

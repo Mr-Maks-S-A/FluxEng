@@ -1,30 +1,37 @@
 #pragma once
 /**
  * @file Replay.hpp
- * @brief Запись и повтор команд игрока, журнал последних тиков (FlightRecorder).
+ * @brief Запись и повтор команд игрока, именованные хеши подсистем, журнал последних тиков (FlightRecorder).
  *
  * Мир меняется только командами внутри тика, поэтому сид + команды каждого тика полностью задают прогон.
- * `Session` прячет режимы за одним вызовом `begin_tick`:
+ *
+ * - **Хеши подсистем названы** (`StateHashes`: «terrain», «mana», «characters»…): при расхождении повтора сразу видно,
+ *   какая подсистема разошлась, а не «хеши не совпали».
+ * - **Запись — журнал EventLog**: команды пишутся по ходу игры и сбрасываются на диск каждые 60 тиков; повреждённые блоки
+ *   восстанавливаются по чётности, а после аварийного завершения файл читается до последнего сброса (без финальных хешей).
+ *   Старые файлы (версии 1 и 2) читаются.
  *
  * @code
- * Replay::Session session = Replay::Session::from_args(args, default_seed);   // --record f | --replay f | --seed N
- * // каждый тик:
- * std::span<const Replay::Command> cmds = session.begin_tick(tick, live_commands);
- * sim.step(cmds);
- * // в конце:
- * Replay::Verdict v = session.finish(ticks_run, hashes);   // запись → файл; повтор → сравнение хешей
+ * Replay::Session session = Replay::Session::from_args(args, default_seed).value();   // --record f | --replay f | --seed N
+ * Replay::Driver driver(sim, session);                    // sim: tick(span<Command>), tick_number(), hashes()
+ * while (driver.step(live_commands)) {}                   // каждый тик; false — повтор дошёл до конца
+ * auto verdict = driver.finish().value();                 // запись → трейлер с хешами; повтор → сверка по подсистемам
  * @endcode
  *
- * Модуль не знает, что значат команды: тип и три числа — на совести игры.
+ * Модуль не знает, что значат команды: тип и три числа — на совести игры (схемы — `CommandRegistry`).
  */
+
+#include <EventLog/Journal.hpp>
 
 #include <array>
 #include <concepts>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -39,10 +46,41 @@ struct Command {
 };
 static_assert(sizeof(Command) == 16);
 
-/// @brief Хеши состояний симуляции: ландшафт, поле маны, ECS (смысл ячеек — по договорённости игры).
-struct StateHashes {
-    std::array<std::uint64_t, 3> value{};
-    [[nodiscard]] friend constexpr bool operator==(const StateHashes&, const StateHashes&) noexcept = default;
+/// @brief Хеш одной подсистемы: имя (до 15 символов) и значение.
+struct NamedHash {
+    std::array<char, 16> name{};
+    std::uint64_t value = 0;
+    [[nodiscard]] std::string_view name_view() const noexcept { return std::string_view(name.data()); }
+    [[nodiscard]] friend constexpr bool operator==(const NamedHash&, const NamedHash&) noexcept = default;
+};
+
+/**
+ * @brief Хеши состояния по подсистемам (до 8). Порядок и имена задаёт симуляция; сравнение — по именам.
+ *
+ * Фиксированный размер: хеши пишутся в журнал каждого тика без аллокаций.
+ */
+class StateHashes {
+public:
+    static constexpr std::size_t capacity = 8;
+
+    /// @brief Добавляет хеш подсистемы. Имя уникально, длина ≤ 15; больше `capacity` подсистем — нарушение контракта.
+    StateHashes& add(std::string_view name, std::uint64_t value);
+    [[nodiscard]] std::size_t count() const noexcept { return m_count; }
+    [[nodiscard]] bool empty() const noexcept { return m_count == 0; }
+    [[nodiscard]] std::span<const NamedHash> entries() const noexcept { return {m_entries.data(), m_count}; }
+    /// @brief Значение по имени; `nullopt`, если такой подсистемы нет.
+    [[nodiscard]] std::optional<std::uint64_t> find(std::string_view name) const noexcept;
+    /// @brief Значение по имени; 0, если нет (для тестов и вывода).
+    [[nodiscard]] std::uint64_t at(std::string_view name) const noexcept { return find(name).value_or(0); }
+    /// @brief Имена подсистем, у которых значения разные или которых нет с одной из сторон.
+    [[nodiscard]] std::vector<std::string> differing(const StateHashes& other) const;
+    /// @brief «terrain=00ab… mana=…».
+    [[nodiscard]] std::string describe() const;
+    [[nodiscard]] friend bool operator==(const StateHashes& a, const StateHashes& b) noexcept { return a.differing(b).empty() && a.m_count == b.m_count; }
+
+private:
+    std::array<NamedHash, capacity> m_entries{};
+    std::uint8_t m_count = 0;
 };
 
 /// @brief Как читать одно из четырёх числовых полей команды (`arg`, `x`, `y`, `z`).
@@ -75,13 +113,22 @@ private:
     std::vector<CommandSchema> m_schemas;
 };
 
+/// @brief Что нашлось при чтении файла записи.
+struct LoadInfo {
+    enum class Format : std::uint8_t { Journal, Legacy }; ///< Журнал EventLog (текущий) или старый плоский файл (версии 1–2).
+    Format format = Format::Journal;
+    bool complete = true;                 ///< Есть трейлер (финальные хеши): запись закончена штатно.
+    EventLog::RecoveryReport recovery{};  ///< Для журнала: сколько блоков испорчено и восстановлено, пропуски записей.
+};
+
 /// @brief Запись прогона: сид, число тиков, команды по тикам и хеши на последнем тике.
 class Recording {
 public:
     std::uint64_t seed = 0;
     std::uint32_t tick_count = 0;
-    StateHashes final_hashes{};
+    StateHashes final_hashes{};         ///< Пусто, если запись оборвана (нет трейлера).
     std::vector<CommandSchema> schemas; ///< Схемы команд (файл самоописываем: инструменты работают без знания игры).
+    bool complete = true;               ///< Запись закончена штатно (нет — после аварийного завершения).
 
     /// @brief Добавляет команду тика. Тики — по неубыванию.
     void add(std::uint32_t tick, const Command& command);
@@ -92,9 +139,13 @@ public:
     [[nodiscard]] std::span<const Command> commands() const noexcept { return m_commands; }
     [[nodiscard]] std::span<const std::uint32_t> command_ticks() const noexcept { return m_ticks; }
 
-    /// @brief Сохраняет в бинарный файл. Текст ошибки — в `unexpected`.
+    /// @brief Сохраняет файл-журнал целиком (с избыточностью). Для записи по ходу игры используйте `Session::record`.
     [[nodiscard]] std::expected<void, std::string> save(const std::string& path) const;
+    /// @brief Читает файл любого формата; журнал при этом восстанавливается по чётности, файл не меняется.
     [[nodiscard]] static std::expected<Recording, std::string> load(const std::string& path);
+    [[nodiscard]] static std::expected<std::pair<Recording, LoadInfo>, std::string> load_with_info(const std::string& path);
+    /// @brief Исправляет повреждения журнала в файле на месте (переписывает восстановленные блоки).
+    [[nodiscard]] static std::expected<EventLog::RecoveryReport, std::string> repair_file(const std::string& path);
 
     [[nodiscard]] friend bool operator==(const Recording&, const Recording&) noexcept = default;
 
@@ -105,10 +156,12 @@ private:
 
 /// @brief Итог сессии: для повтора — совпали ли хеши с записанными.
 struct Verdict {
-    bool checked = false; ///< Повтор: хеши сравнивались.
-    bool match = true;    ///< Хеши совпали (или сравнивать не с чем).
+    bool checked = false;  ///< Повтор: хеши сравнивались (у оборванной записи сравнивать не с чем).
+    bool match = true;     ///< Хеши совпали (или сравнивать не с чем).
+    bool complete = true;  ///< Повторяемая запись была закончена штатно.
     StateHashes expected{};
     StateHashes actual{};
+    std::vector<std::string> differing; ///< Подсистемы, у которых хеши разошлись.
 };
 
 /// @brief Режим прогона: без записи, запись или повтор.
@@ -116,13 +169,21 @@ class Session {
 public:
     enum class Mode : std::uint8_t { Off, Record, Replay };
 
-    /// @brief Разбирает `--record <файл>`, `--replay <файл>`, `--seed N`. Ошибка — файл не прочитан.
+    /// @brief Разбирает `--record <файл>`, `--replay <файл>`, `--seed N`. Ошибка — файл не открылся или не прочитан.
     [[nodiscard]] static std::expected<Session, std::string> from_args(std::span<const std::string> args, std::uint64_t default_seed,
                                                                        const CommandRegistry* registry = nullptr);
     [[nodiscard]] static Session off(std::uint64_t seed) { return Session(Mode::Off, seed); }
-    /// @brief Запись; схемы из `registry` попадут в файл.
-    [[nodiscard]] static Session record(std::uint64_t seed, std::string path = {}, const CommandRegistry* registry = nullptr);
+    /**
+     * @brief Запись. С `path` команды пишутся в файл-журнал **по ходу игры** и сбрасываются на диск каждые 60 тиков:
+     * при аварийном завершении теряется не больше последней секунды. Без `path` — только в памяти (`recording()`).
+     * Схемы из `registry` попадут в файл. Ошибка — файл не создаётся.
+     */
+    [[nodiscard]] static std::expected<Session, std::string> record(std::uint64_t seed, std::string path = {}, const CommandRegistry* registry = nullptr);
     [[nodiscard]] static Session replay(Recording recording);
+
+    Session(Session&&) noexcept;
+    Session& operator=(Session&&) noexcept;
+    ~Session();
 
     [[nodiscard]] Mode mode() const noexcept { return m_mode; }
     [[nodiscard]] std::uint64_t seed() const noexcept { return m_recording.seed; }
@@ -132,7 +193,7 @@ public:
 
     /// @brief Команды, которые нужно применить на этом тике: при повторе — записанные, иначе `live` (и запись).
     [[nodiscard]] std::span<const Command> begin_tick(std::uint32_t tick, std::span<const Command> live);
-    /// @brief Заканчивает прогон: запись сохраняется в файл (если путь задан), повтор сверяет хеши.
+    /// @brief Заканчивает прогон: запись дописывает трейлер (хеши) и сбрасывает файл, повтор сверяет хеши по подсистемам.
     [[nodiscard]] std::expected<Verdict, std::string> finish(std::uint32_t ticks_run, const StateHashes& hashes);
 
     [[nodiscard]] const Recording& recording() const noexcept { return m_recording; }
@@ -142,7 +203,9 @@ private:
 
     Mode m_mode;
     Recording m_recording;
-    std::string m_path;
+    std::unique_ptr<EventLog::FileStorage> m_storage; ///< Файл записи (только режим Record с путём).
+    std::unique_ptr<EventLog::Writer> m_writer;
+    std::uint32_t m_last_flush = 0; ///< Тик последнего сброса записи на диск.
 };
 
 /// @brief Первое расхождение двух записей.
@@ -150,15 +213,17 @@ struct Difference {
     enum class Kind : std::uint8_t { Seed, TickCount, Command, CommandCount, FinalHash };
     Kind kind = Kind::Seed;
     std::uint32_t tick = 0; ///< Для Command: тик расхождения.
-    std::string text;       ///< Человекочитаемо, команды — по схемам записи `a`.
+    std::string text;       ///< Человекочитаемо; для хешей — какие именно подсистемы разошлись.
 };
 
 /// @brief Текст записи целиком: заголовок, схемы команд, команды по тикам. Не требует знания игры.
 [[nodiscard]] std::string inspect(const Recording& recording, std::size_t max_commands = static_cast<std::size_t>(-1));
+/// @brief Текст о том, как прочитан файл: формат, восстановленные блоки, пропуски, оборванная запись.
+[[nodiscard]] std::string describe(const LoadInfo& info);
 /// @brief Первое расхождение (сид, команды по порядку, число тиков, хеши) или `nullopt`, если записи совпадают по смыслу.
 [[nodiscard]] std::optional<Difference> diff(const Recording& a, const Recording& b);
 
-/// @brief Текст итога для консоли: «recorded N ticks…» / «replay: hashes MATCH|DIFFER FROM…».
+/// @brief Текст итога для консоли: «recorded N ticks…» / «replay: hashes MATCH|DIFFER FROM… (расходятся: mana)».
 [[nodiscard]] std::string describe(const Verdict& verdict, Session::Mode mode, std::uint32_t ticks, std::size_t commands);
 
 /// @brief Кольцо последних тиков: номер, команды, хеши. При сбое FLUX_ASSERT сбрасывается в файл.
@@ -178,7 +243,7 @@ public:
     void push(std::uint32_t tick, std::span<const Command> commands, const StateHashes& hashes) noexcept;
     /// @brief Записи от старой к новой.
     [[nodiscard]] std::vector<TickRecord> snapshot() const;
-    /// @brief Текстовый дамп (тик, команды, хеши); `false` — файл не открылся.
+    /// @brief Текстовый дамп (тик, хеши по подсистемам, команды); `false` — файл не открылся.
     bool dump(const std::string& path) const;
 
     /// @brief Делает рекордер «аварийным»: при FLUX_ASSERT дамп уходит в `path`. Один на процесс.
@@ -226,7 +291,7 @@ public:
         if (m_recorder != nullptr) m_recorder->push(tick, commands, std::as_const(*m_sim).hashes());
         return true;
     }
-    /// @brief Закрывает сессию: запись пишет файл, повтор сверяет хеши с записанными.
+    /// @brief Закрывает сессию: запись пишет трейлер с хешами, повтор сверяет хеши с записанными.
     [[nodiscard]] std::expected<Verdict, std::string> finish() { return m_session->finish(m_sim->tick_number(), std::as_const(*m_sim).hashes()); }
     /// @brief Повтор: команды берутся из записи — ввод читать не нужно.
     [[nodiscard]] bool replaying() const noexcept { return m_session->mode() == Session::Mode::Replay; }

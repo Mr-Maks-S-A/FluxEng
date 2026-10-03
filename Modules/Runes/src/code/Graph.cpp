@@ -24,8 +24,11 @@ void Graph::remove(NodeId id) {
     for (auto& [other, n] : m_nodes) {
         if (n.next == id) n.next = no_node;
         if (n.branch == id) n.branch = no_node;
-        std::erase(n.inputs, id);
+        for (NodeId& in : n.inputs) {
+            if (in == id) in = no_node; // слот остаётся (вход отключён), номера остальных входов не сдвигаются
+        }
     }
+    m_last = m_nodes.empty() ? 0 : m_nodes.rbegin()->first; // номер последнего узла освобождается: нумерация зависит только от содержимого графа
 }
 
 GraphNode* Graph::find(NodeId id) noexcept {
@@ -55,7 +58,7 @@ void Graph::set_branch(NodeId from, NodeId to) {
 namespace {
 
 /// Ширины входов (в ячейках) по рунам; пусто — входов нет.
-std::vector<int> input_widths(Rune r) {
+std::vector<int> widths_table(Rune r) {
     switch (r) {
     case Rune::Add: case Rune::Mul: return {1, 1};
     case Rune::ManaAt: return {3};
@@ -70,6 +73,8 @@ struct Compiler {
     explicit Compiler(const Graph& g) : graph(g) {}
     const Graph& graph;
     Program program;
+    std::vector<NodeId> source; ///< Карта источников: узел, породивший каждую руну.
+    NodeId current = no_node;
     std::map<NodeId, std::size_t> label;            ///< Первый байт оператора.
     std::vector<std::pair<std::size_t, NodeId>> fixups; ///< JMP_IF, чей операнд ждёт адрес узла.
     std::set<NodeId> emitted, visiting, checked;
@@ -80,7 +85,10 @@ struct Compiler {
         if (!error) error = Diagnostic{code, 0, node, std::move(detail)};
     }
 
-    void emit(Rune r, std::int32_t operand = 0) { program.code.push_back({r, operand}); }
+    void emit(Rune r, std::int32_t operand = 0) {
+        program.code.push_back({r, operand});
+        source.push_back(current);
+    }
 
     /// Проверка выражения: тип узла, число и ширина входов, отсутствие циклов по данным.
     void check_expression(NodeId id) {
@@ -117,6 +125,7 @@ struct Compiler {
     void emit_expression(NodeId id) {
         const GraphNode& n = *graph.find(id);
         for (const NodeId in : n.inputs) emit_expression(in);
+        current = id;
         emit(n.rune, n.rune == Rune::Push ? n.value : 0);
     }
 
@@ -133,6 +142,7 @@ struct Compiler {
             NodeId cur = queue[q];
             if (emitted.contains(cur)) continue; // ветка вела в оператор, уже собранный по цепочке
             Rune last = Rune::Count;
+            NodeId last_id = no_node;
             while (cur != no_node && !emitted.contains(cur) && !error) {
                 const GraphNode* n = graph.find(cur);
                 if (!n) return fail(cur, Code::MissingNode);
@@ -142,7 +152,9 @@ struct Compiler {
                 emitted.insert(cur);
                 label[cur] = program.code.size();
                 last = n->rune;
+                last_id = cur;
                 for (const NodeId in : n->inputs) emit_expression(in);
+                current = cur;
                 emit(n->rune);
                 if (n->rune == Rune::Draw) emit(Rune::Drop); // результат DRAW в графе не используется
                 if (n->rune == Rune::Halt) break;
@@ -156,6 +168,7 @@ struct Compiler {
             }
             if (error) return;
             if (last == Rune::Halt) continue;
+            current = last_id; // переход и завершающий HALT принадлежат последнему оператору цепочки
             if (cur != no_node) jump_to(cur); // цепочка вливается в уже собранный оператор
             else emit(Rune::Halt);            // цепочка кончилась
         }
@@ -171,12 +184,20 @@ struct Compiler {
 
 } // namespace
 
-std::expected<Program, Diagnostic> compile(const Graph& graph, std::string name) {
+std::vector<int> input_widths(Rune r) { return widths_table(r); }
+
+std::expected<CompiledGraph, Diagnostic> compile_mapped(const Graph& graph, std::string name) {
     Compiler c(graph);
     c.program.name = std::move(name);
     c.run();
     if (c.error) return std::unexpected(*c.error);
-    return std::move(c.program);
+    return CompiledGraph{std::move(c.program), std::move(c.source)};
+}
+
+std::expected<Program, Diagnostic> compile(const Graph& graph, std::string name) {
+    auto mapped = compile_mapped(graph, std::move(name));
+    if (!mapped) return std::unexpected(mapped.error());
+    return std::move(mapped->program);
 }
 
 // ------------------------------------------------------------------ decompile

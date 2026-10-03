@@ -14,7 +14,7 @@ shift || true
 
 mkdir -p "${build_root}"
 
-modules=(MemorySystem JobSystem EventSystem WindowSystem ECSSystem RendererSystem Core Math Phases EventLog Replay ManaField Terrain Runes Character SpellSim WorldRender)
+modules=(MemorySystem JobSystem EventSystem WindowSystem ECSSystem RendererSystem Core Math Phases EventLog Replay ManaField Terrain Runes RuneEditor Character SpellSim WorldRender)
 failed=()
 
 for module in "${modules[@]}"; do

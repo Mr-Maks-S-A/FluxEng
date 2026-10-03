@@ -26,6 +26,11 @@ std::string_view failure_text(Failure failure) noexcept {
 
 // ------------------------------------------------------------ ProgramLibrary
 
+void ProgramLibrary::add_program(std::string name, Program program) {
+    program.name = name;
+    m_programs[std::move(name)] = std::make_shared<const Program>(std::move(program));
+}
+
 std::expected<void, Diagnostic> ProgramLibrary::add_text(std::string name, std::string_view text) {
     auto program = parse_program(text, name);
     if (!program) return std::unexpected(program.error());
@@ -119,6 +124,58 @@ Mana effect_cost(Fixed radius, const Tuning& t) {
 }
 
 } // namespace
+
+// ------------------------------------------------------------------------------------------------- Cost
+
+CostEstimate estimate_cost(const Program& program, const Tuning& tuning) {
+    CostEstimate out;
+    out.runes = static_cast<int>(program.code.size());
+    // Символьный стек констант: радиус эффекта известен, если он получен из PUSH / ADD / MUL.
+    std::vector<std::optional<Fixed>> stack;
+    const auto pop = [&]() -> std::optional<Fixed> {
+        if (stack.empty()) return std::nullopt;
+        const auto v = stack.back();
+        stack.pop_back();
+        return v;
+    };
+    for (std::size_t pc = 0; pc < program.code.size(); ++pc) {
+        const Instruction in = program.code[pc];
+        out.per_pass += tuning.rune_cost;
+        switch (in.rune) {
+        case Rune::Push: stack.emplace_back(Fixed::from_raw(in.operand)); break;
+        case Rune::Dup: if (!stack.empty()) stack.push_back(stack.back()); break;
+        case Rune::Drop: (void)pop(); break;
+        case Rune::Add: case Rune::Mul: {
+            const auto b = pop(), a = pop();
+            if (a && b) stack.emplace_back(in.rune == Rune::Add ? *a + *b : *a * *b);
+            else stack.emplace_back(std::nullopt);
+            break;
+        }
+        case Rune::Caster: case Rune::Aim: case Rune::Target: for (int i = 0; i < 3; ++i) stack.emplace_back(std::nullopt); break;
+        case Rune::ManaAt: for (int i = 0; i < 3; ++i) (void)pop(); stack.emplace_back(std::nullopt); break;
+        case Rune::JmpIf:
+            (void)pop();
+            if (static_cast<std::size_t>(in.operand) <= pc) out.loops = true;
+            stack.clear(); // после перехода состояние стека зависит от пути: константы дальше не отслеживаем
+            break;
+        case Rune::Halt: break;
+        case Rune::Draw:
+            for (int i = 0; i < 5; ++i) (void)pop();
+            stack.emplace_back(std::nullopt);
+            break;
+        case Rune::Carve: case Rune::Raise: {
+            const auto radius = pop();
+            for (int i = 0; i < 3; ++i) (void)pop();
+            ++out.effects;
+            if (radius) out.per_pass += effect_cost(Math::clamp(*radius, tuning.min_radius, tuning.max_radius), tuning);
+            else out.exact = false;
+            break;
+        }
+        case Rune::Count: break;
+        }
+    }
+    return out;
+}
 
 void SpellSystem::run(ECS::World& world, SpellHost& host, EffectBuffer& effects, ECS::Entity spell) {
     MachineState& m = *world.get<MachineState>(spell);

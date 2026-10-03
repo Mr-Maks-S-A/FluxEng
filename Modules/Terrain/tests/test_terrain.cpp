@@ -253,3 +253,24 @@ TEST_CASE("distance_at в метрах согласован с sample в отс�
     CHECK(w.distance_at(sx, sy, sz) == w.sample(at));
     CHECK(w.raw_distance_at(sx, sy, sz) * 128 == w.distance_at(sx, sy, sz).raw);
 }
+
+TEST_CASE("load_chunk: снимок изменённых чанков + сид дают тот же мир, что и правки") {
+    SdfWorld edited(5);
+    (void)edited.carve_sphere(meters(30, 20, 30), Fixed::from_int(4));
+    (void)edited.add_sphere(meters(100, 45, 70), Fixed::from_int(5));
+    SdfWorld restored(5);
+    (void)restored.take_dirty();
+    int copied = 0;
+    for (int i = 0; i < edited.layout().chunk_count(); ++i) {
+        const ChunkCoord c = edited.layout().coord(i);
+        if (!edited.modified(c)) continue; // нетронутые чанки восстанавливает сид
+        restored.load_chunk(c, edited.chunk(c));
+        ++copied;
+    }
+    CHECK(copied > 0);
+    CHECK(copied < 40); // изменено мало: снимок маленький
+    CHECK(restored.hash() == edited.hash());
+    CHECK(restored.dirty_count() >= static_cast<std::size_t>(copied)); // сетки перестроятся: чанки и соседи в очереди
+    CHECK_FALSE(SdfWorld(5).modified({3, 1, 3}));
+    CHECK(edited.modified(ChunkCoord{0, 0, 0}) == edited.modified({0, 0, 0}));
+}

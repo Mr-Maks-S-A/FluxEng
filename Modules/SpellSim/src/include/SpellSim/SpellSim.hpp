@@ -17,7 +17,7 @@
  * фазой (`schedule().insert_after("movement", "machines", fn)`), замеры по фазам собираются расписанием.
  *
  * Только целые и Fixed. Мир меняется только командами: запись `Replay::Session` (сид + команды) однозначно
- * восстанавливает прогон, `hashes()` — контрольная сумма ландшафта, поля маны и ECS.
+ * восстанавливает прогон, `hashes()` — именованные контрольные суммы подсистем: terrain, mana, characters, spells, rng, tick.
  */
 
 #include <Character/Character.hpp>
@@ -114,7 +114,7 @@ public:
     void tick(std::span<const Replay::Command> commands);
 
     [[nodiscard]] std::uint32_t tick_number() const noexcept { return m_tick; }
-    /// @brief Хеши ландшафта, поля маны и ECS (персонаж, заклинания, генератор, номер тика).
+    /// @brief Хеши подсистем по именам: terrain, mana, characters, spells, rng, tick (при расхождении видно, какая разошлась).
     [[nodiscard]] Replay::StateHashes hashes() const;
 
     // Состояние мира наружу — только для чтения: меняется оно командами внутри тика (детерминизм и запись не обойти

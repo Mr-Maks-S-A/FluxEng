@@ -1,0 +1,5 @@
+entry 3
+node 1 TARGET at 40 20
+node 2 PUSH value 3 at 40 110
+node 3 RAISE in 1 2 next 4 at 230 50
+node 4 HALT at 400 50

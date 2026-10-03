@@ -322,7 +322,7 @@ TEST_CASE("хеш заклинаний зависит от состояния м
 }
 
 TEST_CASE("Diagnostic: у каждого кода есть имя и текст, место попадает в format()") {
-    for (int c = 0; c <= static_cast<int>(Code::DuplicateNode); ++c) {
+    for (int c = 0; c <= static_cast<int>(Code::UnusedValue); ++c) {
         const Diagnostic d{static_cast<Code>(c), 0, no_node, "x"};
         CHECK(code_name(d.code) != "?");
         CHECK_FALSE(d.message().empty());
@@ -333,4 +333,47 @@ TEST_CASE("Diagnostic: у каждого кода есть имя и текст,
     CHECK(Diagnostic{Code::NoEntry} == Diagnostic{Code::NoEntry});
     // Один и тот же код — одна и та же логика, независимо от того, кто нашёл ошибку: текст, граф или файл.
     CHECK(parse_program("FLY").error().code == parse_graph("node 1 FLY\n").error().code);
+}
+
+TEST_CASE("estimate_cost: радиус эффекта из констант, неизвестный радиус помечен, цикл найден") {
+    const Tuning tuning;
+    const auto carve = parse_program("TARGET\nPUSH 2\nCARVE\nHALT\n").value();
+    const CostEstimate c = estimate_cost(carve, tuning);
+    CHECK(c.exact);
+    CHECK_FALSE(c.loops);
+    CHECK(c.runes == 4);
+    CHECK(c.effects == 1);
+    CHECK(c.per_pass.to_double() == doctest::Approx(4 * 0.05 + 30 * 8).epsilon(0.001)); // 4 руны + эффект 30·2³
+
+    const auto computed = parse_program("CASTER\nPUSH 1\nPUSH 2\nADD\nPUSH 0.5\nMUL\nRAISE\n").value(); // радиус (1+2)·0.5 = 1.5 — константа
+    const CostEstimate k = estimate_cost(computed, tuning);
+    CHECK(k.exact);
+    CHECK(k.per_pass.to_double() == doctest::Approx(7 * 0.05 + 30 * 3.375).epsilon(0.001));
+
+    const auto dynamic = parse_program("TARGET\nCASTER\nMANA_AT\nCARVE\nHALT\n").value(); // радиус — плотность маны: неизвестен до запуска
+    CHECK_FALSE(estimate_cost(dynamic, tuning).exact);
+
+    const auto looping = parse_program("loop:\nPUSH 1\nJMP_IF loop\n").value();
+    const CostEstimate l = estimate_cost(looping, tuning);
+    CHECK(l.loops);
+    CHECK(l.effects == 0);
+
+    // Оценка совпадает с фактической ценой: исполняем и сравниваем.
+    ECS::World world;
+    SpellSystem system;
+    MockHost host;
+    EffectBuffer effects;
+    const ECS::Entity caster = world.create();
+    (void)system.cast(world, caster, std::make_shared<const Program>(carve), {}, ManaSource::Personal);
+    system.tick(world, host, effects);
+    CHECK(system.last_trace().spent.to_double() == doctest::Approx(c.per_pass.to_double()).epsilon(0.001));
+}
+
+TEST_CASE("add_program: готовая программа попадает в библиотеку, имя заменяется") {
+    ProgramLibrary lib;
+    lib.add_program("edit", parse_program("HALT\n").value());
+    CHECK(lib.find("edit")->code.size() == 1);
+    CHECK(lib.find("edit")->name == "edit");
+    lib.add_program("edit", parse_program("PUSH 1\nHALT\n").value());
+    CHECK(lib.find("edit")->code.size() == 2);
 }

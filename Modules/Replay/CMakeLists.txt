@@ -10,6 +10,7 @@ flux_module_option(REPLAY_BUILD_EXAMPLES "Собирать примеры Replay
 flux_module_option(REPLAY_BUILD_TESTS      "Собирать тесты Replay")
 
 flux_module(Math)
+flux_module(EventLog)
 
 add_library(ReplayOptions INTERFACE)
 target_compile_features(ReplayOptions INTERFACE cxx_std_23)
@@ -29,7 +30,7 @@ target_include_directories(Replay PUBLIC
 )
 target_compile_features(Replay PUBLIC cxx_std_23)
 target_link_libraries(Replay
-    PUBLIC  engine::Math
+    PUBLIC  engine::Math engine::EventLog
     PRIVATE $<BUILD_INTERFACE:ReplayOptions>
 )
 

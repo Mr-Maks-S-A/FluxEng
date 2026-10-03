@@ -258,3 +258,41 @@ TEST_CASE("библиотека: .rungraph и .rune дают один байт-�
     CHECK(lib.find("from_graph")->code.size() == 4); // прежняя
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("карта источников: каждая руна знает узел графа, который её породил") {
+    const auto compiled = compile_mapped(carve_graph(), "carve");
+    REQUIRE(compiled.has_value());
+    REQUIRE(compiled->source.size() == compiled->program.code.size());
+    // TARGET, PUSH 2, CARVE, HALT ← узлы 1, 2, 3, 4 (порядок добавления в carve_graph: target, radius, carve, halt)
+    CHECK(compiled->source[0] == 1);
+    CHECK(compiled->source[1] == 2);
+    CHECK(compiled->source[2] == 3);
+    CHECK(compiled->source[3] == 4);
+    for (const NodeId n : compiled->source) CHECK(n != no_node);
+
+    // Цикл: завершающий переход и HALT принадлежат оператору, который их породил.
+    Graph g;
+    const NodeId one = g.add(Rune::Push, (1_fx).raw), jump = g.add(Rune::JmpIf);
+    g.set_input(jump, 0, one);
+    g.set_branch(jump, jump);
+    g.entry = jump;
+    const auto loop = compile_mapped(g).value();
+    CHECK(loop.source.front() == one);
+    for (const NodeId n : loop.source) CHECK((n == one || n == jump));
+
+    // Общий результат: compile() и compile_mapped() дают один байт-код; DRAW + автоматический DROP принадлежат одному узлу.
+    Graph d;
+    const NodeId c = d.add(Rune::Caster), r = d.add(Rune::Push, (3_fx).raw), amount = d.add(Rune::Push, (10_fx).raw), draw = d.add(Rune::Draw);
+    d.set_input(draw, 0, c), d.set_input(draw, 1, r), d.set_input(draw, 2, amount);
+    d.entry = draw;
+    const auto mapped = compile_mapped(d).value();
+    CHECK(same_code(mapped.program.code, compile(d)->code));
+    CHECK(mapped.source[mapped.source.size() - 2] == draw); // DRAW
+    CHECK(mapped.source[mapped.source.size() - 1] == draw); // DROP или завершающий HALT — того же оператора
+}
+
+TEST_CASE("ширины входов открыты редактору") {
+    CHECK(input_widths(Rune::Carve) == std::vector<int>{3, 1});
+    CHECK(input_widths(Rune::Add) == std::vector<int>{1, 1});
+    CHECK(input_widths(Rune::Target).empty());
+}

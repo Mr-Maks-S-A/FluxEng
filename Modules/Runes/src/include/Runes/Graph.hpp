@@ -55,7 +55,8 @@ public:
 
     /// @brief Новый узел; возвращает его идентификатор.
     NodeId add(Rune rune, std::int32_t value = 0, float x = 0.0f, float y = 0.0f);
-    /// @brief Удаляет узел и все рёбра, которые на него указывали.
+    /// @brief Удаляет узел и все рёбра, которые на него указывали (вход-источник становится отключённым, номера входов не сдвигаются).
+    /// Следующий `add` получает номер «наибольший существующий + 1»: граф с тем же содержимым нумеруется одинаково (важно для повтора правок).
     void remove(NodeId id);
     [[nodiscard]] GraphNode* find(NodeId id) noexcept;
     [[nodiscard]] const GraphNode* find(NodeId id) const noexcept;
@@ -79,8 +80,19 @@ private:
 /// @brief Ширина значения выражения в ячейках стека: 3 у векторов (CASTER, AIM, TARGET), иначе 1.
 [[nodiscard]] constexpr int value_width(Rune r) noexcept { return r == Rune::Caster || r == Rune::Aim || r == Rune::Target ? 3 : 1; }
 
+/// @brief Ширины входов (в ячейках стека) руны: у ADD — {1, 1}, у CARVE — {3, 1} и т. д.; пусто — входов нет (редактор подсказывает по ней, что подключать).
+[[nodiscard]] std::vector<int> input_widths(Rune rune);
+
 /// @brief Проверяет граф и собирает байт-код. Недостижимые от `entry` узлы игнорируются.
 [[nodiscard]] std::expected<Program, Diagnostic> compile(const Graph& graph, std::string name = {});
+
+/// @brief Байт-код и карта «руна → узел графа, породивший её»: по номеру руны (`pc`) трасса исполнения подсвечивает узлы редактора.
+struct CompiledGraph {
+    Program program;
+    std::vector<NodeId> source; ///< `source[pc]` — узел; размер равен числу рун программы.
+};
+/// @brief То же, что `compile`, с картой источников.
+[[nodiscard]] std::expected<CompiledGraph, Diagnostic> compile_mapped(const Graph& graph, std::string name = {});
 /// @brief Граф по байт-коду. Ошибка — программа не выражается графом (значение живёт на стеке между операторами).
 [[nodiscard]] std::expected<Graph, Diagnostic> decompile(const Program& program);
 

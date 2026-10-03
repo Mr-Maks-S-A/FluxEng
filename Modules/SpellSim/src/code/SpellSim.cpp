@@ -166,12 +166,15 @@ void Simulation::tick(std::span<const Replay::Command> commands) {
 }
 
 Replay::StateHashes Simulation::hashes() const {
-    Math::Hasher ecs;
-    Character::hash_characters(m_world, ecs);
-    Runes::hash_spells(m_world, ecs);
-    ecs.add(m_rng.state());
-    ecs.add(m_tick);
-    return {{m_terrain.hash(), m_mana.hash(), ecs.value()}};
+    // Хеши названы по подсистемам: при расхождении повтора сразу видно, какая подсистема разошлась.
+    Math::Hasher characters, spells, rng, tick;
+    Character::hash_characters(m_world, characters);
+    Runes::hash_spells(m_world, spells);
+    rng.add(m_rng.state());
+    tick.add(m_tick);
+    Replay::StateHashes h;
+    h.add("terrain", m_terrain.hash()).add("mana", m_mana.hash()).add("characters", characters.value()).add("spells", spells.value()).add("rng", rng.value()).add("tick", tick.value());
+    return h;
 }
 
 } // namespace SpellSim

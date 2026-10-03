@@ -8,7 +8,9 @@
 #   Siege        — оборона замка на всех модулях: параллельные системы (JobSystem), детерминизм при любом числе потоков
 #   Voxel        — примитивный клон Minecraft: 3D, чанки, разведка того, что выделить в модули
 #   CardDuel     — 3D-карточная дуэль в духе Hearthstone: все модули и сторонние библиотеки сразу
+#   WorldJournal — эксперимент: мир как «сид + журнал правок» (EventLog), снимки, повреждения файла
 #   RuneCell     — заклинание как живая клетка: руны-атомы с валентностью, мембрана, деление, обмен маны
+#   RuneCell2    — заклинание-граф: вид сверху на SDF-мир, поле маны и визуальный редактор рун (RuneEditor)
 #   FirstSpell   — пре-альфа «Первое заклинание»: персонаж на SDF-ландшафте, руны, мана как поле, запись и повтор
 #
 # Все игры рисуют через RHI: `--backend gl|vulkan` выбирает графический API.
@@ -33,7 +35,7 @@ add_library(CardDuelRules STATIC card_duel/Rules.cpp)
 target_include_directories(CardDuelRules PUBLIC card_duel)
 target_link_libraries(CardDuelRules PUBLIC engine::EventSystem engine::JobSystem engine::MemorySystem PRIVATE SandboxWarnings)
 
-foreach(game IN ITEMS FallingSand Colony Ecosystem Swarm Siege Voxel CardDuel RuneCell FirstSpell)
+foreach(game IN ITEMS FallingSand Colony Ecosystem Swarm Siege Voxel CardDuel RuneCell FirstSpell RuneCell2)
     string(REGEX REPLACE "([a-z])([A-Z])" "\\1_\\2" folder "${game}")
     string(TOLOWER "${folder}" folder)
     add_executable(${game} ${folder}/main.cpp)
@@ -49,6 +51,17 @@ endforeach()
 # FirstSpell: пре-альфа «Первое заклинание» — вся логика в модулях SpellSim / Replay / WorldRender.
 # Игре достаточно одной зонтичной цели (engine::FluxEng = Gameplay + Presentation; см. Modules/CMakeLists.txt).
 target_link_libraries(FirstSpell PRIVATE engine::FluxEng)
+target_link_libraries(RuneCell2 PRIVATE engine::FluxEng)
+target_compile_definitions(RuneCell2 PRIVATE RUNE_CELL2_SPELLS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/rune_cell2/spells2")
+# WorldJournal: эксперимент «мир как сид + журнал правок» (сохранение через EventLog, снимки изменённых чанков, повреждения файла).
+# Консольный: окна и графики нет, нужен только Gameplay (Terrain + EventLog).
+add_executable(WorldJournal world_journal/main.cpp)
+target_link_libraries(WorldJournal PRIVATE engine::Terrain engine::EventLog engine::Math SandboxWarnings)
+if(BUILD_TESTING)
+    add_test(NAME Sandbox.WorldJournal COMMAND WorldJournal --edits 900 --snapshot-every 400 --dir "${CMAKE_CURRENT_BINARY_DIR}/world_journal_test")
+    set_tests_properties(Sandbox.WorldJournal PROPERTIES LABELS "sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+endif()
+
 # ReplayTool: просмотр и сравнение записей (файл самоописываем — нужен только Replay).
 add_executable(ReplayTool first_spell/replay_tool.cpp)
 target_link_libraries(ReplayTool PRIVATE engine::Replay SandboxWarnings)
@@ -68,6 +81,18 @@ if(BUILD_TESTING)
                          PASS_REGULAR_EXPRESSION "записи совпадают")
     add_test(NAME Sandbox.FirstSpell.replay COMMAND FirstSpell --replay first_spell_test.rec)
     set_tests_properties(Sandbox.FirstSpell.replay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 180 FIXTURES_REQUIRED first_spell_record
+                         PASS_REGULAR_EXPRESSION "hashes MATCH the recording" FAIL_REGULAR_EXPRESSION "DIFFER FROM")
+endif()
+
+# RuneCell2: сценарий без ввода — граф строится жестами и правками редактора, выстрел, undo/redo, автосохранение с порчей блока;
+# запись и повтор (редактор в них заблокирован, граф берётся из файла): хеши совпадают.
+if(BUILD_TESTING)
+    add_test(NAME Sandbox.RuneCell2.autoplay COMMAND RuneCell2 --autoplay --ticks 300 --autosave rune_cell2_test_autosave.fluxlog)
+    set_tests_properties(Sandbox.RuneCell2.autoplay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "RuneCell2: OK" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    add_test(NAME Sandbox.RuneCell2.record COMMAND RuneCell2 --autoplay --ticks 400 --record rune_cell2_test.rec)
+    set_tests_properties(Sandbox.RuneCell2.record PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 FIXTURES_SETUP rune_cell2_record PASS_REGULAR_EXPRESSION "recorded 400 ticks")
+    add_test(NAME Sandbox.RuneCell2.replay COMMAND RuneCell2 --replay rune_cell2_test.rec)
+    set_tests_properties(Sandbox.RuneCell2.replay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 180 FIXTURES_REQUIRED rune_cell2_record
                          PASS_REGULAR_EXPRESSION "hashes MATCH the recording" FAIL_REGULAR_EXPRESSION "DIFFER FROM")
 endif()
 

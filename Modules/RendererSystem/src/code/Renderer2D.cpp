@@ -152,6 +152,13 @@ std::expected<TextureHandle, std::string> Renderer2D::load_texture(const std::fi
     return create_texture(*image, desc);
 }
 
+void Renderer2D::update_texture(TextureHandle handle, const Image& image) {
+    if (handle.index >= m_textures.size()) {
+        throw RendererError(std::format("Renderer2D: unknown texture handle {}", handle.index));
+    }
+    m_textures[handle.index].update(image);
+}
+
 const Texture& Renderer2D::texture(TextureHandle handle) const {
     if (handle.index >= m_textures.size()) {
         throw RendererError(std::format("Renderer2D: unknown texture handle {}", handle.index));

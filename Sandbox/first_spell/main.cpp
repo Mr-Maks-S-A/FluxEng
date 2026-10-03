@@ -341,7 +341,7 @@ public:
         const std::uint32_t ticks = sim->tick_number();
         const Replay::StateHashes h = sim->hashes();
         std::println("\n===== FirstSpell: {} ticks, {} frames =====", ticks, frames);
-        std::println("hash terrain {:016x} mana {:016x} ecs {:016x}", h.value[0], h.value[1], h.value[2]);
+        std::println("hashes: {}", h.describe());
         std::println("casts {} (empty slot {}), terrain edits {}, jobs threads {}", sim->casts(), sim->failed_casts(), sim->edits_applied(), app.jobs().threads());
         std::println("tick avg {:.3f} ms worst {:.3f} ms (budget 4) | frame avg {:.2f} ms worst {:.2f} ms (budget 16.6) | mesh/frame {:.3f} ms", tick_ms.value,
                      worst_tick_ms, frame_ms.value, worst_frame_ms, mesh_ms.value);

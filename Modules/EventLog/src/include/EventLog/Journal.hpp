@@ -57,6 +57,15 @@ struct Config {
     [[nodiscard]] friend bool operator==(const Config&, const Config&) = default;
 };
 
+/// @brief Раскладка файла журнала (для инструментов, тестов и имитации повреждений): смещение блока `block` полосы `stripe` в байтах.
+/// Блок на проводе занимает `12 + block_size` байт; перед полосами — две копии заголовка по 32 байта.
+[[nodiscard]] constexpr std::uint64_t block_offset(const Config& config, std::uint64_t stripe, int block) noexcept {
+    const std::uint64_t wire = 12 + config.block_size;
+    return 64 + stripe * static_cast<std::uint64_t>(config.data_blocks + config.parity_blocks) * wire + static_cast<std::uint64_t>(block) * wire;
+}
+/// @brief Размер одного блока на проводе (данные + 12 байт служебных).
+[[nodiscard]] constexpr std::uint64_t block_wire_size(const Config& config) noexcept { return 12 + config.block_size; }
+
 /// @brief Идентификатор типа события: FNV-1a 32 бита от имени (`E::event_name`) — одинаков на любой машине.
 [[nodiscard]] constexpr std::uint32_t type_id(std::string_view name) noexcept {
     std::uint32_t h = 2166136261u;
