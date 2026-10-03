@@ -14,6 +14,14 @@ include(CTest)
 # подключили в чужой проект через add_subdirectory().
 option(FLUX_DEVELOPER "Собирать тесты, бенчмарки и примеры всех модулей" ${PROJECT_IS_TOP_LEVEL})
 
+# Отдельная конфигурация с AddressSanitizer и UBSan для всего движка и игр:
+#   cmake -S . -B build-asan -DFLUX_SANITIZE=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
+option(FLUX_SANITIZE "Собирать всё с AddressSanitizer и UBSan" OFF)
+if(FLUX_SANITIZE AND NOT MSVC)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 # ------------------------------------------------------------------------------
 # 1. УСКОРЕНИЕ СБОРКИ (ccache)
 # ------------------------------------------------------------------------------

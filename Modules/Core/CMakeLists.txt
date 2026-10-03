@@ -13,6 +13,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FluxModule.cmake")
 # Зависимости: MemorySystem (память тика и кадра), JobSystem (потоки для систем игры), EventSystem,
 # RendererSystem (2D, 3D, шрифт интерфейса, скриншот в PNG), WindowSystem, GLFW (коды клавиш).
 # ==============================================================================
+flux_module_option(CORE_BUILD_EXAMPLES "Собирать примеры Core")
 flux_module_option(CORE_BUILD_TESTS "Собирать тесты Core")
 
 flux_module(MemorySystem)
@@ -23,6 +24,7 @@ flux_module(RendererSystem)
 flux_external(glfw)
 
 add_library(Core STATIC
+    src/code/Actions.cpp
     src/code/App.cpp
 )
 add_library(engine::Core ALIAS Core)
@@ -50,4 +52,8 @@ if(CORE_BUILD_TESTS)
     enable_testing()
     flux_external(doctest)
     add_subdirectory(tests)
+endif()
+
+if(CORE_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()

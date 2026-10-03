@@ -9,6 +9,7 @@
 #   Voxel        — примитивный клон Minecraft: 3D, чанки, разведка того, что выделить в модули
 #   CardDuel     — 3D-карточная дуэль в духе Hearthstone: все модули и сторонние библиотеки сразу
 #   RuneCell     — заклинание как живая клетка: руны-атомы с валентностью, мембрана, деление, обмен маны
+#   FirstSpell   — пре-альфа «Первое заклинание»: персонаж на SDF-ландшафте, руны, мана как поле, запись и повтор
 #
 # Все игры рисуют через RHI: `--backend gl|vulkan` выбирает графический API.
 # Каркас приложения (окно, рендер, шина, фиксированный тик, ввод → события) живёт
@@ -32,7 +33,7 @@ add_library(CardDuelRules STATIC card_duel/Rules.cpp)
 target_include_directories(CardDuelRules PUBLIC card_duel)
 target_link_libraries(CardDuelRules PUBLIC engine::EventSystem engine::JobSystem engine::MemorySystem PRIVATE SandboxWarnings)
 
-foreach(game IN ITEMS FallingSand Colony Ecosystem Swarm Siege Voxel CardDuel RuneCell)
+foreach(game IN ITEMS FallingSand Colony Ecosystem Swarm Siege Voxel CardDuel RuneCell FirstSpell)
     string(REGEX REPLACE "([a-z])([A-Z])" "\\1_\\2" folder "${game}")
     string(TOLOWER "${folder}" folder)
     add_executable(${game} ${folder}/main.cpp)
@@ -44,6 +45,30 @@ foreach(game IN ITEMS FallingSand Colony Ecosystem Swarm Siege Voxel CardDuel Ru
         set_tests_properties(Sandbox.${game} PROPERTIES LABELS "gpu;sandbox" TIMEOUT 60)
     endif()
 endforeach()
+
+# FirstSpell: пре-альфа «Первое заклинание» — вся логика в модулях SpellSim / Replay / WorldRender.
+target_link_libraries(FirstSpell PRIVATE engine::SpellSim engine::Replay engine::WorldRenderTerrain)
+# ReplayTool: просмотр и сравнение записей (файл самоописываем — нужен только Replay).
+add_executable(ReplayTool first_spell/replay_tool.cpp)
+target_link_libraries(ReplayTool PRIVATE engine::Replay SandboxWarnings)
+target_compile_definitions(FirstSpell PRIVATE FIRST_SPELL_SPELLS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/first_spell/spells")
+if(BUILD_TESTING)
+    # Прогон по сценарию без ввода и повтор записи: хеши ландшафта, поля маны и ECS на последнем тике совпадают.
+    add_test(NAME Sandbox.FirstSpell.autoplay COMMAND FirstSpell --autoplay --ticks 900)
+    set_tests_properties(Sandbox.FirstSpell.autoplay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120)
+    add_test(NAME Sandbox.FirstSpell.record COMMAND FirstSpell --autoplay --ticks 1200 --record first_spell_test.rec)
+    set_tests_properties(Sandbox.FirstSpell.record PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 FIXTURES_SETUP first_spell_record
+                         PASS_REGULAR_EXPRESSION "recorded 1200 ticks")
+    add_test(NAME Sandbox.FirstSpell.inspect COMMAND ReplayTool inspect first_spell_test.rec 5)
+    set_tests_properties(Sandbox.FirstSpell.inspect PROPERTIES LABELS "sandbox" FIXTURES_REQUIRED first_spell_record
+                         PASS_REGULAR_EXPRESSION "move dx=1 dz=0")
+    add_test(NAME Sandbox.FirstSpell.diff COMMAND ReplayTool diff first_spell_test.rec first_spell_test.rec)
+    set_tests_properties(Sandbox.FirstSpell.diff PROPERTIES LABELS "sandbox" FIXTURES_REQUIRED first_spell_record
+                         PASS_REGULAR_EXPRESSION "записи совпадают")
+    add_test(NAME Sandbox.FirstSpell.replay COMMAND FirstSpell --replay first_spell_test.rec)
+    set_tests_properties(Sandbox.FirstSpell.replay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 180 FIXTURES_REQUIRED first_spell_record
+                         PASS_REGULAR_EXPRESSION "hashes MATCH the recording" FAIL_REGULAR_EXPRESSION "DIFFER FROM")
+endif()
 
 # CardDuel: правила, хроника в консоли (spdlog). Второй smoke-тест — ИИ против ИИ без пауз показа.
 target_link_libraries(CardDuel PRIVATE CardDuelRules spdlog::spdlog)

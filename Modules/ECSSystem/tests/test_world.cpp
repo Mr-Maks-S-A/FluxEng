@@ -197,3 +197,20 @@ TEST_CASE("clear: всё удалено, старые ссылки невали�
 }
 
 }
+
+TEST_CASE("entities_of: по возрастанию id независимо от истории удалений") {
+    ECS::World world;
+    std::vector<ECS::Entity> made;
+    for (int i = 0; i < 6; ++i) {
+        made.push_back(world.create());
+        world.emplace<int>(made.back(), i);
+    }
+    world.destroy(made[1]); // swap-remove перемешивает плотный массив пула
+    world.destroy(made[3]);
+    made.push_back(world.create()); // занимает освободившийся слот
+    world.emplace<int>(made.back(), 99);
+    const std::vector<ECS::Entity> ids = world.entities_of<int>();
+    REQUIRE(ids.size() == 5);
+    CHECK(std::is_sorted(ids.begin(), ids.end()));
+    CHECK(world.entities_of<double>().empty()); // пула нет — пустой список
+}

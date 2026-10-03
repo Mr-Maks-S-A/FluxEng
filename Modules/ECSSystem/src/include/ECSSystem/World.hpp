@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <type_traits>
@@ -160,6 +161,22 @@ public:
     [[nodiscard]] const ComponentPool<T>* find_pool() const noexcept {
         const std::size_t id = component_id<T>();
         return id < m_pools.size() ? static_cast<const ComponentPool<T>*>(m_pools[id].get()) : nullptr;
+    }
+
+    /**
+     * @brief Сущности с компонентом `T` в порядке возрастания id (индекс, затем поколение).
+     *
+     * Плотный массив пула хранит компоненты в порядке вставки с «swap-remove» при удалении, поэтому порядок
+     * обхода пула зависит от истории. Системы, чей результат должен быть одинаков при любом прошлом
+     * (детерминированная симуляция, повторы), обходят сущности этим списком. Копия: безопасно менять мир во время обхода.
+     */
+    template<typename T>
+    [[nodiscard]] std::vector<Entity> entities_of() const {
+        const ComponentPool<T>* p = find_pool<T>();
+        if (p == nullptr) return {};
+        std::vector<Entity> out(p->entities().begin(), p->entities().end());
+        std::sort(out.begin(), out.end());
+        return out;
     }
 
     /// @brief Число компонентов `T`.

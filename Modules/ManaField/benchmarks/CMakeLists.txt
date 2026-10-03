@@ -1,0 +1,2 @@
+add_executable(ManaFieldBenchmarks benchmark_main.cpp)
+target_link_libraries(ManaFieldBenchmarks PRIVATE engine::ManaField ManaFieldOptions benchmark::benchmark)

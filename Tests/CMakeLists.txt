@@ -49,3 +49,8 @@ else()
     add_test(NAME Integration.all COMMAND IntegrationTests)
     set_tests_properties(Integration.all PROPERTIES LABELS integration-gpu)
 endif()
+
+# Документация модулей: у каждого есть описание, примеры (включённые в сборку и тесты), тесты и описание заголовков.
+# Сами примеры собираются и запускаются как тесты: ctest -L example.
+add_test(NAME Docs.modules COMMAND "${CMAKE_SOURCE_DIR}/tools/check_module_docs.sh")
+set_tests_properties(Docs.modules PROPERTIES LABELS "docs")
