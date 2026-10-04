@@ -15,6 +15,9 @@
 #   WindowSystem + RendererSystem   [gpu] скрытое окно, Renderer3D + Renderer2D + шрифт + Framebuffer + PNG,
 #                                         Camera3D совпадает с растеризацией
 #   Core + все модули               [gpu] цикл App: порядок хуков, ввод (inject) → шина, память тика, скриншот
+#   RuntimeSystem + ECS + Jobs +          «выделенный сервер» без окна: порядок init по зависимостям, один результат
+#     EventSystem + MemorySystem          при 0, 1 и 4 потоках, shutdown при исключении
+#   Core + RuntimeSystem            [gpu] модули внутри клиента: configure → init → setup, обратное завершение, откат
 #
 # Запуск: ctest --test-dir build -L integration   (без GPU: -L integration -LE gpu)
 # ==============================================================================
@@ -27,8 +30,10 @@ add_executable(IntegrationTests
     integration/test_net_spellsim.cpp
     integration/test_render_pipeline.cpp
     integration/test_core_app.cpp
+    integration/test_runtime_headless.cpp
+    integration/test_app_modules.cpp
 )
-target_link_libraries(IntegrationTests PRIVATE engine::Core engine::ECSSystem engine::Net engine::Challenge CardDuelRules doctest::doctest)
+target_link_libraries(IntegrationTests PRIVATE engine::Core engine::RuntimeSystem engine::ECSSystem engine::Net engine::Challenge CardDuelRules doctest::doctest)
 target_compile_features(IntegrationTests PRIVATE cxx_std_23)
 if(MSVC)
     target_compile_options(IntegrationTests PRIVATE /W4 /utf-8)

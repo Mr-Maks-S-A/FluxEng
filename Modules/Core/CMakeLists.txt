@@ -6,11 +6,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FluxModule.cmake")
 # ==============================================================================
 # Core — слой приложения движка.
 #
-# Владеет окном, рендером и шиной событий, крутит цикл «кадры + фиксированный тик»,
-# превращает ввод в события модуля "Platform" и даёт отладку (оверлей шины, F1, граф).
+# Клиент: владеет окном и рендером, крутит цикл кадров поверх RuntimeSystem::Runtime (шина событий, задачи,
+# память, фиксированный тик, модули с жизненным циклом), превращает ввод в события модуля "Platform"
+# и даёт отладку (оверлей шины, F1, граф). Выделенному серверу Core не нужен — только RuntimeSystem.
 # Игра реализует Core::Game и запускается через Core::run<G>().
 #
-# Зависимости: MemorySystem (память тика и кадра), JobSystem (потоки для систем игры), EventSystem,
+# Зависимости: RuntimeSystem (ядро без графики), MemorySystem (память тика и кадра), JobSystem (потоки для систем игры), EventSystem,
 # RendererSystem (2D, 3D, шрифт интерфейса, скриншот в PNG), WindowSystem, GLFW (коды клавиш).
 # ==============================================================================
 flux_module_option(CORE_BUILD_EXAMPLES "Собирать примеры Core")
@@ -19,6 +20,7 @@ flux_module_option(CORE_BUILD_TESTS "Собирать тесты Core")
 flux_module(MemorySystem)
 flux_module(JobSystem)
 flux_module(EventSystem)
+flux_module(RuntimeSystem)
 flux_module(WindowSystem)
 flux_module(RendererSystem)
 flux_external(glfw)
@@ -36,7 +38,7 @@ target_include_directories(Core PUBLIC
 
 target_compile_features(Core PUBLIC cxx_std_23)
 target_link_libraries(Core
-    PUBLIC  engine::MemorySystem engine::JobSystem engine::EventSystem engine::RendererSystem engine::WindowSystem glfw
+    PUBLIC  engine::RuntimeSystem engine::MemorySystem engine::JobSystem engine::EventSystem engine::RendererSystem engine::WindowSystem glfw
 )
 
 if(MSVC)

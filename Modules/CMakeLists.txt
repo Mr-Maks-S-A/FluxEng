@@ -6,6 +6,7 @@
 add_subdirectory( MemorySystem )     # аллокаторы (ZII): без зависимостей
 add_subdirectory( JobSystem )        # задачи и параллельные циклы: MemorySystem
 add_subdirectory( EventSystem )
+add_subdirectory( RuntimeSystem )    # ядро без графики: тик, модули, шина, задачи, память
 add_subdirectory( WindowSystem )
 add_subdirectory( ECSSystem )
 add_subdirectory( RendererSystem )
