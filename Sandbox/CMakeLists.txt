@@ -11,6 +11,7 @@
 #   WorldJournal — эксперимент: мир как «сид + журнал правок» (EventLog), снимки, повреждения файла
 #   RuneCell     — заклинание как живая клетка: руны-атомы с валентностью, мембрана, деление, обмен маны
 #   RuneCell2    — заклинание-граф: вид сверху на SDF-мир, поле маны и визуальный редактор рун (RuneEditor); уровни Challenge (--level)
+#   ModuleProof  — игра-проверка: все модули движка в живом приложении, чек-лист на экране (линкуется с engine::FluxEng)
 #   CoopScribe   — «пилот и писарь»: два игрока проходят уровень вместе по плохой сети (Net lockstep + SetProgram), консольная
 #   FirstSpell   — пре-альфа «Первое заклинание»: персонаж на SDF-ландшафте, руны, мана как поле, запись и повтор
 #
@@ -61,6 +62,14 @@ target_link_libraries(WorldJournal PRIVATE engine::Terrain engine::EventLog engi
 if(BUILD_TESTING)
     add_test(NAME Sandbox.WorldJournal COMMAND WorldJournal --edits 900 --snapshot-every 400 --dir "${CMAKE_CURRENT_BINARY_DIR}/world_journal_test")
     set_tests_properties(Sandbox.WorldJournal PROPERTIES LABELS "sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+endif()
+
+# ModuleProof: игра-проверка — все модули движка в живом приложении (линкуется с engine::FluxEng): чек-лист на экране и в консоли.
+add_executable(ModuleProof module_proof/main.cpp)
+target_link_libraries(ModuleProof PRIVATE engine::FluxEng engine::Core SandboxWarnings)
+if(BUILD_TESTING)
+    add_test(NAME Sandbox.ModuleProof COMMAND ModuleProof --ticks 60 --screenshot module_proof_test.png)
+    set_tests_properties(Sandbox.ModuleProof PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "ModuleProof: OK" FAIL_REGULAR_EXPRESSION "ОШИБКА")
 endif()
 
 # CoopScribe: «пилот и писарь» — два игрока проходят уровень вместе по плохой сети (Net lockstep + Challenge + SetProgram).
