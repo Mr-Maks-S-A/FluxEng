@@ -27,6 +27,7 @@ add_library(Runes STATIC
     src/code/Graph.cpp
     src/code/Program.cpp
     src/code/Spells.cpp
+    src/code/Wire.cpp
 )
 add_library(engine::Runes ALIAS Runes)
 target_include_directories(Runes PUBLIC

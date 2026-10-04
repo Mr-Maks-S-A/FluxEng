@@ -5,3 +5,4 @@
 #include <Runes/Graph.hpp>
 #include <Runes/Program.hpp>
 #include <Runes/Spells.hpp>
+#include <Runes/Wire.hpp>

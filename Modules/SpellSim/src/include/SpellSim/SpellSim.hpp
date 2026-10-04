@@ -31,8 +31,11 @@
 #include <array>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
+#include <string>
 #include <span>
 #include <vector>
 
@@ -43,7 +46,7 @@ constexpr int mana_step_period = 6; ///< Поле шагает каждый ше
 
 // ---- Команды ----
 
-enum class CommandType : std::uint16_t { Move = 1, Jump = 2, Cast = 3 };
+enum class CommandType : std::uint16_t { Move = 1, Jump = 2, Cast = 3, SetProgram = 4 };
 
 /// Типизированные команды: поля с именами вместо `x, y, z`. `encode` кладёт их в `Replay::Command`, `decode` читает обратно.
 /// Схемы (`register_commands`) попадают в файл записи, поэтому он читается инструментами без знания игры.
@@ -66,12 +69,36 @@ struct CastCommand {
     [[nodiscard]] static CastCommand decode(const Replay::Command& c) noexcept;
 };
 
+/**
+ * @brief SetProgram: поставить в слот гримуара программу по хешу содержимого (`Runes::program_hash`).
+ *
+ * Так правки редактора попадают в **поток команд**: они записываются, воспроизводятся и (через `Net`) уходят другим игрокам.
+ * Сама программа в команду не влезает (16 байт) и приходит отдельно — блобом (`Replay::Blob`, пакет `Net::BlobMessage`):
+ * её надо передать в `Simulation::provide_program` **до** тика с командой. Нет программы с таким хешем — команда отклоняется
+ * (счётчик `rejected_programs`), слот остаётся прежним: отказ одинаков у всех, симуляция не расходится.
+ */
+struct SetProgramCommand {
+    int slot = 0;
+    std::uint64_t hash = 0;
+    [[nodiscard]] Replay::Command encode() const noexcept;
+    [[nodiscard]] static SetProgramCommand decode(const Replay::Command& c) noexcept;
+};
+
 /// @brief Регистрирует схемы всех команд игры (имена полей и их тип).
 void register_commands(Replay::CommandRegistry& registry);
 
 [[nodiscard]] inline Replay::Command move_command(Math::Fixed dx, Math::Fixed dz) noexcept { return MoveCommand{dx, dz}.encode(); }
 [[nodiscard]] inline Replay::Command jump_command() noexcept { return JumpCommand{}.encode(); }
 [[nodiscard]] inline Replay::Command cast_command(int slot, Runes::ManaSource source, Math::FVec3 aim) noexcept { return CastCommand{slot, source, aim}.encode(); }
+
+/// @brief Хеш блоба, который нужен команде, чтобы исполниться (`SetProgram` → программа); иначе `nullopt`.
+/// Подключается к сети: `Net::Lockstep::set_blob_reference(SpellSim::blob_reference)` — команда ждёт свою программу.
+[[nodiscard]] inline std::optional<std::uint64_t> blob_reference(const Replay::Command& c) noexcept {
+    if (c.type != static_cast<std::uint16_t>(CommandType::SetProgram)) return std::nullopt;
+    return SetProgramCommand::decode(c).hash;
+}
+
+[[nodiscard]] inline Replay::Command set_program_command(int slot, std::uint64_t hash) noexcept { return SetProgramCommand{slot, hash}.encode(); }
 
 // ---- События ----
 
@@ -88,8 +115,20 @@ struct TerrainEditedEvent {
         EventSystem::Field<"chunks", &TerrainEditedEvent::chunks>>;
 };
 
+/// @brief Правка ландшафта при создании мира — «уровень» поверх сида: стена, обрыв, насыпь. Часть настройки, не команда
+/// (в записи это известно по номеру уровня, как и гримуар).
+struct SetupEdit {
+    bool carve = false;             ///< true — вырезать шар, false — насыпать.
+    Math::WorldPos center{};
+    Math::Fixed radius{};
+};
+
 struct Config {
     std::uint64_t seed = 1;
+    std::vector<SetupEdit> setup;                 ///< Применяются по порядку при создании мира.
+    std::int32_t spawn_offset_x_m = 0;            ///< Сдвиг точки появления от центра мира, метры.
+    std::int32_t spawn_offset_z_m = 0;
+    std::size_t max_custom_programs = 64;         ///< Сколько различных программ можно подать через `provide_program` (защита от переполнения).
     ManaField::Config mana{};
     Runes::Tuning runes{};
     Character::Config character{};
@@ -110,6 +149,17 @@ public:
     /// @brief Перечитывает каталог заклинаний `*.rune`: без перезапуска; идущие заклинания не страдают.
     Runes::ProgramLibrary::Report reload_spells(const std::filesystem::path& directory);
 
+    /**
+     * @brief Принимает байты программы (`Runes::encode_program`) и кладёт её в библиотеку под именем `#<хеш>`; возвращает хеш.
+     * Байты проверяются (`decode_program`), число различных программ ограничено `Config::max_custom_programs`.
+     * Это «данные», а не состояние мира: порядок и момент подачи значения не имеют, пока блоб пришёл до команды `SetProgram`.
+     */
+    [[nodiscard]] std::expected<std::uint64_t, std::string> provide_program(std::span<const std::byte> bytes);
+    /// @brief Для `Replay::Driver`: принять блоб записи (программу). Ошибки игнорируются — команда на него будет отклонена.
+    void provide_blob(std::span<const std::byte> bytes) { (void)provide_program(bytes); }
+    /// @brief Есть ли в библиотеке программа с таким хешем (сеть ждёт блоб, пока её нет).
+    [[nodiscard]] bool has_program(std::uint64_t hash) const;
+
     /// @brief Один тик: команды этого тика → шесть фаз.
     void tick(std::span<const Replay::Command> commands);
 
@@ -126,6 +176,7 @@ public:
     [[nodiscard]] ECS::Entity player() const noexcept { return m_player; }
     [[nodiscard]] const Runes::SpellSystem& spells() const noexcept { return m_spells; }
     [[nodiscard]] Runes::ProgramLibrary& programs() noexcept { return m_programs; }
+    [[nodiscard]] const Runes::ProgramLibrary& programs() const noexcept { return m_programs; }
     [[nodiscard]] const Config& config() const noexcept { return m_config; }
 
     /// @brief Чанки ландшафта, чьи сетки нужно перестроить (фаза 6); очередь очищается. Забирает отрисовка после тика.
@@ -141,6 +192,8 @@ public:
     [[nodiscard]] std::uint32_t casts() const noexcept { return m_casts; }
     [[nodiscard]] std::uint32_t failed_casts() const noexcept { return m_failed_casts; }
     [[nodiscard]] std::uint32_t edits_applied() const noexcept { return m_edits_applied; }
+    [[nodiscard]] std::uint32_t programs_set() const noexcept { return m_programs_set; }          ///< Принятые `SetProgram`.
+    [[nodiscard]] std::uint32_t rejected_programs() const noexcept { return m_rejected_programs; } ///< Отклонённые `SetProgram` (нет блоба, неверный слот).
 
 private:
     class Host;
@@ -166,7 +219,8 @@ private:
     EventSystem::EventWriter<TerrainEditedEvent> m_terrain_edited;
     bool m_declared = false;
     std::uint32_t m_tick = 0;
-    std::uint32_t m_casts = 0, m_failed_casts = 0, m_edits_applied = 0;
+    std::uint32_t m_casts = 0, m_failed_casts = 0, m_edits_applied = 0, m_programs_set = 0, m_rejected_programs = 0;
+    std::size_t m_custom_programs = 0;
     Phases::Schedule m_schedule;
     std::span<const Replay::Command> m_commands; ///< Команды тика, пока идёт `tick()`.
     std::vector<Terrain::EditResult> m_edited;   ///< Правки ландшафта этого тика (для событий фазы 6).

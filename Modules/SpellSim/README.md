@@ -26,6 +26,26 @@ driver.step({SpellSim::CastCommand{0, Runes::ManaSource::Personal, aim}.encode()
 Replay::StateHashes h = sim.hashes();                              // по именам: terrain, mana, characters, spells, rng, tick
 ```
 
+### `SetProgram` — правки редактора в потоке команд
+
+`SetProgramCommand{slot, hash}` ставит в слот гримуара программу **по хешу содержимого**. Сама программа (`Runes::encode_program`) не
+влезает в 16 байт и приходит отдельно — блобом: `Simulation::provide_program(bytes)` проверяет её (`decode_program`), кладёт в библиотеку
+под именем `#<хеш>` и возвращает хеш (число различных программ ограничено `Config::max_custom_programs`). Дальше команда
+`set_program_command(slot, hash)` идёт как любая другая: **записывается, воспроизводится и уходит по сети**. Нет блоба с таким хешем или неверный слот —
+команда отклоняется (`rejected_programs()`), слот остаётся прежним: отказ одинаков у всех, симуляция не расходится.
+
+```cpp
+const auto hash = driver.submit_blob(Runes::encode_program(program));   // Replay::Driver: блоб в запись и в симуляцию
+live.push_back(SpellSim::set_program_command(1, hash));                 // на ближайшем тике слот 1 держит эту программу
+```
+
+Для сети: `SpellSim::blob_reference` — «какой блоб нужен команде» для `Net::Lockstep::set_blob_reference`.
+
+### Уровни поверх сида
+
+`Config::setup` — правки ландшафта при создании мира (`SetupEdit`: шар породы или пустоты), `spawn_offset_x_m/z_m` — сдвиг точки
+появления. На них стоит модуль `Challenge`. Это часть настройки, не команда: в записи она известна по номеру уровня.
+
 ## Состояние наружу — только для чтения
 
 `terrain()`, `mana()`, `world()`, `spells()` — `const`: изменить мир мимо команд нельзя, поэтому запись всегда воспроизводима.

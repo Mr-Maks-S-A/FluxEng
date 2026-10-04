@@ -34,4 +34,12 @@ private:
     std::uint64_t m_hash = offset_basis;
 };
 
+/// @brief Хеш содержимого байтов вместе с длиной: имя блоба в записи и сети (одинаковый везде, где нужен «адрес по содержимому»).
+[[nodiscard]] inline std::uint64_t content_hash(std::span<const std::byte> bytes) noexcept {
+    Hasher h;
+    h.add(bytes.size());
+    h.add_bytes(bytes);
+    return h.value();
+}
+
 } // namespace Math

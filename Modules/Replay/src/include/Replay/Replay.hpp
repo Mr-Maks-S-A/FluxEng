@@ -47,6 +47,21 @@ struct Command {
 static_assert(sizeof(Command) == 16);
 
 /// @brief Хеш одной подсистемы: имя (до 15 символов) и значение.
+/// @brief Хеш содержимого (FNV-1a, 64 бита): имя блоба. Не криптографический — защита от случайных ошибок, а не от злоумышленника.
+[[nodiscard]] std::uint64_t content_hash(std::span<const std::byte> bytes) noexcept;
+
+/**
+ * @brief Блоб — произвольные данные, на которые ссылаются команды хешем (например, программа заклинания для `SetProgram`).
+ *
+ * Команда занимает 16 байт и не вмещает граф. Поэтому большое лежит в записи рядом, адресуется содержимым, а команда
+ * несёт только хеш: одна и та же программа не дублируется, а повтор и сеть доставляют блоб раньше команды.
+ */
+struct Blob {
+    std::uint64_t hash = 0;
+    std::vector<std::byte> bytes;
+    [[nodiscard]] friend bool operator==(const Blob&, const Blob&) noexcept = default;
+};
+
 struct NamedHash {
     std::array<char, 16> name{};
     std::uint64_t value = 0;
@@ -130,8 +145,13 @@ public:
     std::vector<CommandSchema> schemas; ///< Схемы команд (файл самоописываем: инструменты работают без знания игры).
     bool complete = true;               ///< Запись закончена штатно (нет — после аварийного завершения).
 
+    std::vector<Blob> blobs;            ///< Блобы, на которые ссылаются команды (по хешу, без повторов).
+
     /// @brief Добавляет команду тика. Тики — по неубыванию.
     void add(std::uint32_t tick, const Command& command);
+    /// @brief Добавляет блоб (повтор по хешу игнорируется); возвращает хеш.
+    std::uint64_t add_blob(std::span<const std::byte> bytes);
+    [[nodiscard]] const Blob* find_blob(std::uint64_t hash) const noexcept;
     /// @brief Команды тика (пустой span, если их не было).
     [[nodiscard]] std::span<const Command> at(std::uint32_t tick) const noexcept;
     [[nodiscard]] std::size_t command_count() const noexcept { return m_commands.size(); }
@@ -191,6 +211,11 @@ public:
     [[nodiscard]] bool finished(std::uint32_t tick) const noexcept { return m_mode == Mode::Replay && tick >= m_recording.tick_count; }
     [[nodiscard]] std::uint32_t recorded_ticks() const noexcept { return m_recording.tick_count; }
 
+    /**
+     * @brief Кладёт блоб в запись (режим Record; в повторе блобы уже в записи) и возвращает его хеш.
+     * Вызывать **до** тика, где его использует команда: в файл блоб попадает раньше команды.
+     */
+    std::uint64_t add_blob(std::uint32_t tick, std::span<const std::byte> bytes);
     /// @brief Команды, которые нужно применить на этом тике: при повторе — записанные, иначе `live` (и запись).
     [[nodiscard]] std::span<const Command> begin_tick(std::uint32_t tick, std::span<const Command> live);
     /// @brief Заканчивает прогон: запись дописывает трейлер (хеши) и сбрасывает файл, повтор сверяет хеши по подсистемам.
@@ -277,10 +302,34 @@ concept Simulatable = requires(Sim& sim, std::span<const Command> commands) {
  * std::println("{}", Replay::describe(*driver.finish(), session.mode(), ...));
  * @endcode
  */
+/// Симуляция, принимающая блобы по ссылкам команд (необязательно): `Driver` отдаёт ей блобы записи при повторе.
+template<typename Sim>
+concept BlobSink = requires(Sim& s, std::span<const std::byte> bytes) { s.provide_blob(bytes); };
+
 template<Simulatable Sim>
 class Driver {
 public:
-    Driver(Sim& sim, Session& session, FlightRecorder* recorder = nullptr) : m_sim(&sim), m_session(&session), m_recorder(recorder) {}
+    /// Повтор: блобы записи сразу отдаются симуляции (если она умеет их принимать, `provide_blob`) — ссылки команд на них
+    /// (хеш программы) к моменту команды уже разрешимы.
+    Driver(Sim& sim, Session& session, FlightRecorder* recorder = nullptr) : m_sim(&sim), m_session(&session), m_recorder(recorder) {
+        if constexpr (BlobSink<Sim>) {
+            if (m_session->mode() == Session::Mode::Replay) {
+                for (const Blob& blob : m_session->recording().blobs) m_sim->provide_blob(blob.bytes);
+            }
+        }
+    }
+
+    /**
+     * @brief Блоб на этом тике (программа заклинания и т. п.): в запись и в симуляцию; возвращает хеш для команды.
+     * Вызывать до `step`, в котором уйдёт команда со ссылкой. При повторе ничего не делает (блобы уже в записи).
+     */
+    std::uint64_t submit_blob(std::span<const std::byte> bytes) {
+        const std::uint64_t hash = m_session->add_blob(m_sim->tick_number(), bytes);
+        if constexpr (BlobSink<Sim>) {
+            if (m_session->mode() != Session::Mode::Replay) m_sim->provide_blob(bytes);
+        }
+        return hash;
+    }
 
     /// @brief Один тик симуляции с командами сессии. `false` — повтор дошёл до конца записи (тик не выполнялся).
     bool step(std::span<const Command> live) {

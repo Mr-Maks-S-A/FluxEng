@@ -40,4 +40,39 @@ static void BM_ParseProgram(benchmark::State& state) {
 }
 BENCHMARK(BM_ParseProgram)->Unit(benchmark::kMicrosecond);
 
+
+// ---- Программа как байты (SetProgram: хеш + блоб) ----
+namespace {
+Runes::Program long_program() {
+    Runes::Program p;
+    for (int i = 0; i < 127; ++i) {
+        p.code.push_back({Runes::Rune::Push, i});
+        p.code.push_back({Runes::Rune::Drop, 0});
+    }
+    p.code.push_back({Runes::Rune::Halt, 0});
+    return p;
+}
+} // namespace
+
+/// Каноничные байты программы в 255 рун (почти предел): цена одной правки редактора на отправку.
+static void BM_EncodeProgram(benchmark::State& state) {
+    const Runes::Program p = long_program();
+    for (auto _ : state) benchmark::DoNotOptimize(Runes::encode_program(p));
+}
+BENCHMARK(BM_EncodeProgram);
+
+/// Разбор и проверка пришедших байтов (граница доверия).
+static void BM_DecodeProgram(benchmark::State& state) {
+    const auto bytes = Runes::encode_program(long_program());
+    for (auto _ : state) benchmark::DoNotOptimize(Runes::decode_program(bytes));
+}
+BENCHMARK(BM_DecodeProgram);
+
+/// Хеш программы: имя блоба в записи и в сети.
+static void BM_ProgramHash(benchmark::State& state) {
+    const Runes::Program p = long_program();
+    for (auto _ : state) benchmark::DoNotOptimize(Runes::program_hash(p));
+}
+BENCHMARK(BM_ProgramHash);
+
 BENCHMARK_MAIN();

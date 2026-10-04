@@ -14,12 +14,14 @@ add_subdirectory( Math )           # Fixed Q16.16, WorldPos, sqrt, Rng, хеш, 
 add_subdirectory( Phases )         # расписание фаз тика с замерами: Math
 add_subdirectory( EventLog )       # журнал событий с избыточностью (Рид—Соломон): Math; адаптер шины — EventSystem
 add_subdirectory( Replay )         # запись и повтор команд, FlightRecorder: Math
+add_subdirectory( Net )            # lockstep по ненадёжной сети: пакеты, транспорт, блобы, сверка хешей: Math, Replay
 add_subdirectory( ManaField )      # поле маны: Math
 add_subdirectory( Terrain )        # SDF-ландшафт, сетка поверхности: Math, MemorySystem
 add_subdirectory( Runes )          # язык рун, стековая машина: Math, ECSSystem, EventSystem
 add_subdirectory( RuneEditor )     # редактор графов рун без GPU: правки как данные, undo, диагностика, мышь: Runes, EventLog
 add_subdirectory( Character )      # персонаж-капсула: Math, ECSSystem, Terrain
 add_subdirectory( SpellSim )       # порядок тика, команды, весь мир: все модули выше
+add_subdirectory( Challenge )      # уровни, цели, пределы, судья и звёзды поверх симуляции: SpellSim
 add_subdirectory( WorldRender )    # камеры, ландшафт, туман, линии, оверлей: Terrain, ManaField, RendererSystem, JobSystem
 add_subdirectory( Core )           # слой приложения: зависит от модулей выше
 
@@ -29,10 +31,10 @@ add_subdirectory( Core )           # слой приложения: зависи
 #
 #   engine::Foundation    Math, MemorySystem, JobSystem, Phases      числа, память, потоки, расписание тика
 #   engine::Simulation    Foundation + EventSystem, ECSSystem,       детерминированное ядро: события, сущности,
-#                         Replay, EventLog                           запись/повтор, журнал с избыточностью
+#                         Replay, EventLog, Net                      запись/повтор, журнал с избыточностью, сеть lockstep
 #   engine::Platform      WindowSystem, RendererSystem, Core         окно, графика, каркас приложения
 #   engine::Gameplay      Simulation + Terrain, ManaField, Runes,    правила мира заклинаний
-#                         RuneEditor, Character, SpellSim
+#                         RuneEditor, Character, SpellSim, Challenge
 #   engine::Presentation  Platform + WorldRender (+ адаптеры),        отрисовка мира и редактора рун
 #                         RuneEditorView
 #   engine::FluxEng       всё вместе
@@ -43,7 +45,7 @@ target_link_libraries(FluxFoundation INTERFACE engine::Math engine::MemorySystem
 
 add_library(FluxSimulation INTERFACE)
 add_library(engine::Simulation ALIAS FluxSimulation)
-target_link_libraries(FluxSimulation INTERFACE engine::Foundation engine::EventSystem engine::ECSSystem engine::Replay engine::EventLog)
+target_link_libraries(FluxSimulation INTERFACE engine::Foundation engine::EventSystem engine::ECSSystem engine::Replay engine::EventLog engine::Net)
 
 add_library(FluxPlatform INTERFACE)
 add_library(engine::Platform ALIAS FluxPlatform)
@@ -51,7 +53,7 @@ target_link_libraries(FluxPlatform INTERFACE engine::WindowSystem engine::Render
 
 add_library(FluxGameplay INTERFACE)
 add_library(engine::Gameplay ALIAS FluxGameplay)
-target_link_libraries(FluxGameplay INTERFACE engine::Simulation engine::Terrain engine::ManaField engine::Runes engine::RuneEditor engine::Character engine::SpellSim)
+target_link_libraries(FluxGameplay INTERFACE engine::Simulation engine::Terrain engine::ManaField engine::Runes engine::RuneEditor engine::Character engine::SpellSim engine::Challenge)
 
 add_library(FluxPresentation INTERFACE)
 add_library(engine::Presentation ALIAS FluxPresentation)

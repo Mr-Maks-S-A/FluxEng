@@ -376,3 +376,60 @@ TEST_CASE("diff: первое расхождение записей, хеши �
     fewer.add(2, {.type = 1, .x = 5});
     CHECK(diff(a, fewer)->kind == Difference::Kind::CommandCount);
 }
+
+// ---- Блобы: данные, на которые ссылаются команды ----
+
+TEST_CASE("блоб: хеш по содержимому, дубликаты не копятся") {
+    Recording r;
+    const std::byte data[] = {std::byte{1}, std::byte{2}, std::byte{3}};
+    const std::uint64_t h = r.add_blob(data);
+    CHECK(h == content_hash(data));
+    CHECK(r.add_blob(data) == h);
+    CHECK(r.blobs.size() == 1);
+    REQUIRE(r.find_blob(h) != nullptr);
+    CHECK(r.find_blob(h)->bytes.size() == 3);
+    CHECK(r.find_blob(h + 1) == nullptr);
+    const std::byte other[] = {std::byte{1}, std::byte{2}};
+    CHECK(content_hash(other) != h); // длина входит в хеш
+}
+
+TEST_CASE("блоб: save/load и потоковая запись сохраняют блобы и порядок команд") {
+    std::vector<std::byte> big(1500); // больше блока журнала (256 байт): запись пересекает границы блоков
+    for (std::size_t i = 0; i < big.size(); ++i) big[i] = static_cast<std::byte>(i * 7);
+
+    const std::string streamed = temp_file("replay_blob_streamed.rec");
+    {
+        auto s = Session::record(3, streamed).value();
+        const std::uint64_t h = s.add_blob(0, big);
+        (void)s.begin_tick(0, std::array{Command{.type = 4, .arg = 1, .x = static_cast<std::int32_t>(h)}});
+        (void)s.finish(1, H(1, 2, 3));
+    }
+    auto loaded = Recording::load(streamed);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->blobs.size() == 1);
+    CHECK(loaded->blobs[0].bytes == big);
+    CHECK(loaded->command_count() == 1);
+
+    const std::string saved = temp_file("replay_blob_saved.rec");
+    REQUIRE(loaded->save(saved).has_value());
+    auto again = Recording::load(saved);
+    REQUIRE(again.has_value());
+    CHECK(*again == *loaded);
+    std::filesystem::remove(streamed);
+    std::filesystem::remove(saved);
+}
+
+TEST_CASE("блоб: испорченное содержимое отбрасывается по хешу, а не подменяется") {
+    const std::string path = temp_file("replay_blob_corrupt.rec");
+    Recording r;
+    r.seed = 1;
+    r.tick_count = 1;
+    const std::byte data[] = {std::byte{9}, std::byte{8}, std::byte{7}};
+    r.add_blob(data);
+    r.blobs[0].bytes[1] = std::byte{0}; // хеш не сходится с содержимым
+    REQUIRE(r.save(path).has_value());
+    auto loaded = Recording::load(path);
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->blobs.empty());
+    std::filesystem::remove(path);
+}

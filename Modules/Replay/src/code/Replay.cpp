@@ -1,6 +1,7 @@
 #include <Replay/Replay.hpp>
 
 #include <Math/Assert.hpp>
+#include <Math/Hash.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -16,6 +17,7 @@ constexpr std::uint32_t type_meta = 1;    // версия(1) + сид(8)
 constexpr std::uint32_t type_schema = 2;  // схема команды
 constexpr std::uint32_t type_command = 3; // команда (тик — в записи журнала)
 constexpr std::uint32_t type_trailer = 4; // число тиков + хеши подсистем: запись закончена штатно
+constexpr std::uint32_t type_blob = 5;    // хеш(8) + байты: данные, на которые ссылаются команды
 constexpr std::uint8_t recording_version = 1;
 constexpr std::uint32_t flush_interval_ticks = 60; // раз в секунду симуляции
 
@@ -79,6 +81,24 @@ std::optional<Command> decode_command(std::span<const std::byte> payload) {
     out.y = static_cast<std::int32_t>(c.u32());
     out.z = static_cast<std::int32_t>(c.u32());
     return c.ok && c.at == payload.size() ? std::optional<Command>(out) : std::nullopt;
+}
+
+Bytes encode_blob(const Blob& blob) {
+    Bytes b;
+    b.u64(blob.hash);
+    b.data.insert(b.data.end(), blob.bytes.begin(), blob.bytes.end());
+    return b;
+}
+
+/// Блоб с несовпавшим хешем отбрасывается: подмена содержимого не должна пройти в повтор.
+std::optional<Blob> decode_blob(std::span<const std::byte> payload) {
+    Cursor c{payload};
+    Blob blob;
+    blob.hash = c.u64();
+    if (!c.ok) return std::nullopt;
+    blob.bytes.assign(payload.begin() + 8, payload.end());
+    if (content_hash(blob.bytes) != blob.hash) return std::nullopt;
+    return blob;
 }
 
 Bytes encode_meta(std::uint64_t seed) {
@@ -209,11 +229,16 @@ void write_recording(EventLog::Writer& w, const Recording& r) {
     const Bytes meta = encode_meta(r.seed);
     w.append(0, type_meta, meta.data);
     for (const CommandSchema& s : r.schemas) w.append(0, type_schema, encode_schema(s).data);
+    for (const Blob& blob : r.blobs) w.append(0, type_blob, encode_blob(blob).data);
     for (std::size_t i = 0; i < r.command_count(); ++i) w.append(r.command_ticks()[i], type_command, encode_command(r.commands()[i]).data);
     if (r.complete) w.append(r.tick_count, type_trailer, encode_trailer(r.tick_count, r.final_hashes).data);
 }
 
 } // namespace
+
+std::uint64_t content_hash(std::span<const std::byte> bytes) noexcept {
+    return Math::content_hash(bytes);
+}
 
 // -------------------------------------------------------------------------------------------- StateHashes
 
@@ -281,6 +306,19 @@ void Recording::add(std::uint32_t tick, const Command& command) {
     m_commands.push_back(command);
 }
 
+std::uint64_t Recording::add_blob(std::span<const std::byte> bytes) {
+    const std::uint64_t hash = content_hash(bytes);
+    if (!find_blob(hash)) blobs.push_back(Blob{hash, std::vector<std::byte>(bytes.begin(), bytes.end())});
+    return hash;
+}
+
+const Blob* Recording::find_blob(std::uint64_t hash) const noexcept {
+    for (const Blob& b : blobs) {
+        if (b.hash == hash) return &b;
+    }
+    return nullptr;
+}
+
 std::span<const Command> Recording::at(std::uint32_t tick) const noexcept {
     const auto [lo, hi] = std::ranges::equal_range(m_ticks, tick);
     return std::span<const Command>(m_commands).subspan(static_cast<std::size_t>(lo - m_ticks.begin()), static_cast<std::size_t>(hi - lo));
@@ -328,6 +366,11 @@ std::expected<std::pair<Recording, LoadInfo>, std::string> Recording::load_with_
         }
         case type_schema:
             if (auto s = decode_schema(rec.payload)) r.schemas.push_back(std::move(*s));
+            break;
+        case type_blob:
+            if (auto blob = decode_blob(rec.payload)) {
+                if (!r.find_blob(blob->hash)) r.blobs.push_back(std::move(*blob));
+            }
             break;
         case type_command:
             if (const auto c = decode_command(rec.payload)) r.add(rec.tick, *c);
@@ -405,6 +448,14 @@ std::expected<Session, std::string> Session::from_args(std::span<const std::stri
     }
     if (!record_path.empty()) return record(seed, std::move(record_path), registry);
     return off(seed);
+}
+
+std::uint64_t Session::add_blob(std::uint32_t tick, std::span<const std::byte> bytes) {
+    const std::uint64_t hash = content_hash(bytes);
+    if (m_mode != Mode::Record || m_recording.find_blob(hash)) return hash;
+    m_recording.add_blob(bytes);
+    if (m_writer) m_writer->append(tick, type_blob, encode_blob(*m_recording.find_blob(hash)).data);
+    return hash;
 }
 
 std::span<const Command> Session::begin_tick(std::uint32_t tick, std::span<const Command> live) {

@@ -1,6 +1,7 @@
 #include <SpellSim/SpellSim.hpp>
 
 #include <Math/Hash.hpp>
+#include <Runes/Wire.hpp>
 
 namespace SpellSim {
 
@@ -25,12 +26,21 @@ CastCommand CastCommand::decode(const Replay::Command& c) noexcept {
     return {c.arg & 0xFF, static_cast<Runes::ManaSource>((c.arg >> 8) & 0xFF), {Fixed::from_raw(c.x), Fixed::from_raw(c.y), Fixed::from_raw(c.z)}};
 }
 
+Replay::Command SetProgramCommand::encode() const noexcept {
+    return {.type = static_cast<std::uint16_t>(CommandType::SetProgram), .arg = static_cast<std::int16_t>(slot),
+            .x = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash)), .y = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash >> 32)), .z = 0};
+}
+SetProgramCommand SetProgramCommand::decode(const Replay::Command& c) noexcept {
+    return {c.arg, static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.x)) | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.y)) << 32)};
+}
+
 void register_commands(Replay::CommandRegistry& registry) {
     using Field = Replay::CommandField;
     constexpr auto fx = Field::Kind::Fixed;
     registry.add({static_cast<std::uint16_t>(CommandType::Move), "move", {Field{}, Field{"dx", fx}, Field{}, Field{"dz", fx}}})
         .add({static_cast<std::uint16_t>(CommandType::Jump), "jump", {}})
-        .add({static_cast<std::uint16_t>(CommandType::Cast), "cast", {Field{"slot_source", Field::Kind::Int}, Field{"aim_x", fx}, Field{"aim_y", fx}, Field{"aim_z", fx}}});
+        .add({static_cast<std::uint16_t>(CommandType::Cast), "cast", {Field{"slot_source", Field::Kind::Int}, Field{"aim_x", fx}, Field{"aim_y", fx}, Field{"aim_z", fx}}})
+        .add({static_cast<std::uint16_t>(CommandType::SetProgram), "set_program", {Field{"slot", Field::Kind::Int}, Field{"hash_lo", Field::Kind::Int}, Field{"hash_hi", Field::Kind::Int}, Field{}}});
 }
 
 /// Мир глазами заклинаний: чувства и кошелёк. Эффекты на ландшафт руны возвращают данными (`EffectBuffer`), фаза 3 их применяет.
@@ -63,9 +73,14 @@ private:
 Simulation::Simulation(const Config& config)
     : m_config(config), m_terrain(config.seed), m_mana(config.mana), m_spells(config.runes), m_rng(config.seed), m_host(std::make_unique<Host>(*this)) {
     build_schedule();
+    for (const SetupEdit& edit : config.setup) {
+        if (edit.carve) (void)m_terrain.carve_sphere(edit.center, edit.radius);
+        else (void)m_terrain.add_sphere(edit.center, edit.radius);
+    }
     Character::Grimoire grimoire;
     grimoire.slots = config.grimoire;
-    const std::int64_t cx = m_terrain.layout().size_x() / 2, cz = m_terrain.layout().size_z() / 2;
+    const std::int64_t cx = m_terrain.layout().size_x() / 2 + static_cast<std::int64_t>(config.spawn_offset_x_m) * Fixed::one_raw;
+    const std::int64_t cz = m_terrain.layout().size_z() / 2 + static_cast<std::int64_t>(config.spawn_offset_z_m) * Fixed::one_raw;
     const WorldPos feet{cx, m_terrain.ground_height(cx, cz) + Fixed::from_ratio(1, 2).raw, cz};
     m_player = Character::spawn(m_world, feet, {config.player_mana, config.player_mana, config.player_mana_regen}, grimoire);
 }
@@ -83,6 +98,21 @@ void Simulation::set_grimoire_slot(int slot, std::string name) {
     m_world.get<Character::Grimoire>(m_player)->slots[static_cast<std::size_t>(slot)] = std::move(name);
 }
 
+std::expected<std::uint64_t, std::string> Simulation::provide_program(std::span<const std::byte> bytes) {
+    auto program = Runes::decode_program(bytes);
+    if (!program) return std::unexpected("программа отвергнута: " + program.error().message());
+    const std::uint64_t hash = Math::content_hash(bytes);
+    const std::string name = Runes::program_name_for_hash(hash);
+    if (m_programs.find(name)) return hash;
+    if (m_custom_programs >= m_config.max_custom_programs) return std::unexpected("слишком много различных программ (лимит " + std::to_string(m_config.max_custom_programs) + ")");
+    program->name = name;
+    m_programs.add_program(name, std::move(*program));
+    ++m_custom_programs;
+    return hash;
+}
+
+bool Simulation::has_program(std::uint64_t hash) const { return m_programs.find(Runes::program_name_for_hash(hash)) != nullptr; }
+
 Runes::ProgramLibrary::Report Simulation::reload_spells(const std::filesystem::path& directory) { return m_programs.load_directory(directory); }
 
 void Simulation::apply(const Replay::Command& c) {
@@ -95,6 +125,17 @@ void Simulation::apply(const Replay::Command& c) {
         break;
     }
     case CommandType::Jump: m_world.get<Character::Motor>(m_player)->jump = true; break;
+    case CommandType::SetProgram: {
+        const SetProgramCommand set = SetProgramCommand::decode(c);
+        const std::string name = Runes::program_name_for_hash(set.hash);
+        if (set.slot < 0 || set.slot >= Character::Grimoire::slot_count || !m_programs.find(name)) {
+            ++m_rejected_programs;
+            break;
+        }
+        m_world.get<Character::Grimoire>(m_player)->slots[static_cast<std::size_t>(set.slot)] = name;
+        ++m_programs_set;
+        break;
+    }
     case CommandType::Cast: {
         const CastCommand cast = CastCommand::decode(c);
         if (cast.slot < 0 || cast.slot >= Character::Grimoire::slot_count) break;

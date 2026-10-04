@@ -10,7 +10,8 @@
 #   CardDuel     — 3D-карточная дуэль в духе Hearthstone: все модули и сторонние библиотеки сразу
 #   WorldJournal — эксперимент: мир как «сид + журнал правок» (EventLog), снимки, повреждения файла
 #   RuneCell     — заклинание как живая клетка: руны-атомы с валентностью, мембрана, деление, обмен маны
-#   RuneCell2    — заклинание-граф: вид сверху на SDF-мир, поле маны и визуальный редактор рун (RuneEditor)
+#   RuneCell2    — заклинание-граф: вид сверху на SDF-мир, поле маны и визуальный редактор рун (RuneEditor); уровни Challenge (--level)
+#   CoopScribe   — «пилот и писарь»: два игрока проходят уровень вместе по плохой сети (Net lockstep + SetProgram), консольная
 #   FirstSpell   — пре-альфа «Первое заклинание»: персонаж на SDF-ландшафте, руны, мана как поле, запись и повтор
 #
 # Все игры рисуют через RHI: `--backend gl|vulkan` выбирает графический API.
@@ -62,6 +63,21 @@ if(BUILD_TESTING)
     set_tests_properties(Sandbox.WorldJournal PROPERTIES LABELS "sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
 endif()
 
+# CoopScribe: «пилот и писарь» — два игрока проходят уровень вместе по плохой сети (Net lockstep + Challenge + SetProgram).
+# Консольный: окна и графики нет, GPU не нужен — идёт в обычном прогоне CTest.
+add_executable(CoopScribe coop_scribe/main.cpp)
+target_link_libraries(CoopScribe PRIVATE engine::Gameplay SandboxWarnings)
+if(BUILD_TESTING)
+    foreach(level IN ITEMS mine mound fort)
+        add_test(NAME Sandbox.CoopScribe.${level} COMMAND CoopScribe --level ${level})
+        set_tests_properties(Sandbox.CoopScribe.${level} PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    endforeach()
+    add_test(NAME Sandbox.CoopScribe.terrible_network COMMAND CoopScribe --level mound --latency 6 --jitter 8 --loss 300 --dup 150 --corrupt 80 --delay 5)
+    set_tests_properties(Sandbox.CoopScribe.terrible_network PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    add_test(NAME Sandbox.CoopScribe.cheater COMMAND CoopScribe --level mound --cheat)
+    set_tests_properties(Sandbox.CoopScribe.cheater PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "OK \\(читера поймали\\)" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+endif()
+
 # ReplayTool: просмотр и сравнение записей (файл самоописываем — нужен только Replay).
 add_executable(ReplayTool first_spell/replay_tool.cpp)
 target_link_libraries(ReplayTool PRIVATE engine::Replay SandboxWarnings)
@@ -85,7 +101,8 @@ if(BUILD_TESTING)
 endif()
 
 # RuneCell2: сценарий без ввода — граф строится жестами и правками редактора, выстрел, undo/redo, автосохранение с порчей блока;
-# запись и повтор (редактор в них заблокирован, граф берётся из файла): хеши совпадают.
+# запись и повтор (в записи правки редактора идут командами SetProgram и лежат в файле блобами; в повторе редактор только для чтения): хеши совпадают.
+# Уровни (модуль Challenge): бот эталонного решения проходит каждый уровень в настоящей игре; прохождение «Крепости» записывается и воспроизводится.
 if(BUILD_TESTING)
     add_test(NAME Sandbox.RuneCell2.autoplay COMMAND RuneCell2 --autoplay --ticks 300 --autosave rune_cell2_test_autosave.fluxlog)
     set_tests_properties(Sandbox.RuneCell2.autoplay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "RuneCell2: OK" FAIL_REGULAR_EXPRESSION "ОШИБКА")
@@ -94,6 +111,15 @@ if(BUILD_TESTING)
     add_test(NAME Sandbox.RuneCell2.replay COMMAND RuneCell2 --replay rune_cell2_test.rec)
     set_tests_properties(Sandbox.RuneCell2.replay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 180 FIXTURES_REQUIRED rune_cell2_record
                          PASS_REGULAR_EXPRESSION "hashes MATCH the recording" FAIL_REGULAR_EXPRESSION "DIFFER FROM")
+    foreach(level IN ITEMS walk mine mound)
+        add_test(NAME Sandbox.RuneCell2.level.${level} COMMAND RuneCell2 --level ${level} --bot --ticks 300)
+        set_tests_properties(Sandbox.RuneCell2.level.${level} PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "Level ${level}: WON" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    endforeach()
+    add_test(NAME Sandbox.RuneCell2.level.fort COMMAND RuneCell2 --level fort --bot --ticks 800 --record rune_cell2_fort.rec)
+    set_tests_properties(Sandbox.RuneCell2.level.fort PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 FIXTURES_SETUP rune_cell2_fort PASS_REGULAR_EXPRESSION "Level fort: WON")
+    add_test(NAME Sandbox.RuneCell2.level.fort.replay COMMAND RuneCell2 --level fort --replay rune_cell2_fort.rec)
+    set_tests_properties(Sandbox.RuneCell2.level.fort.replay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 180 FIXTURES_REQUIRED rune_cell2_fort
+                         PASS_REGULAR_EXPRESSION "Level fort: WON.*hashes MATCH the recording" FAIL_REGULAR_EXPRESSION "DIFFER FROM")
 endif()
 
 # CardDuel: правила, хроника в консоли (spdlog). Второй smoke-тест — ИИ против ИИ без пауз показа.

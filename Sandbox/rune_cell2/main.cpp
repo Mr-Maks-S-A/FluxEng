@@ -20,11 +20,17 @@
  * рамка — выделение; ПКМ — сдвиг; колесо — масштаб (над узлом PUSH — значение); палитра рун сверху — клик ставит узел;
  * Del/X — удалить выбранное, Ctrl+Z / Ctrl+Y — undo/redo, L — раскладка, F — вписать, E — сделать выбранный оператор входом,
  * C — отменить жест, Enter — выстрел из слота 1 из редактора, F5 — сохранить граф в файл.
+ * **Правки редактора — в потоке команд.** Собравшийся граф уходит блобом (`Runes::encode_program`) и командой `SetProgram{слот, хеш}`:
+ * правки попадают в запись (`--record`), воспроизводятся (`--replay`) и годятся для сети (`Net`). В повторе редактор только для чтения.
+ *
+ * **Уровни** (`--level id`: walk | mine | mound | fort, модуль Challenge): цель-отметка на карте, пределы, судья, звёзды; ваш граф ставится в слот 2
+ * (слот 1 — заклинание уровня, если оно есть). `--bot` — играет эталонный бот уровня (демонстрация и проверка).
  * Аргументы: `--spell файл.rungraph` (стартовый граф; по умолчанию spells2/carve.rungraph), `--recover` (взять граф из автосохранения), `--editor` (сразу открыть редактор),
- * `--autosave файл`, `--seed N`, `--record файл`, `--replay файл` (редактор в них только для чтения: граф — часть настройки, а не команда),
+ * `--autosave файл`, `--seed N`, `--record файл`, `--replay файл` (в записи правки редактора пишутся командами SetProgram; в повторе редактор только для чтения),
  * `--autoplay` (сценарий без ввода с проверками), общие (`--ticks`, `--threads`, `--screenshot`, `--backend`) — см. Core::App.
  */
 
+#include <Challenge/Play.hpp>
 #include <Core/Core.hpp>
 #include <RuneEditor/Analysis.hpp>
 #include <RuneEditor/Autosave.hpp>
@@ -61,7 +67,7 @@ namespace {
 
 int g_failed_checks = 0; ///< Автоигра: число проваленных проверок (код возврата).
 
-constexpr const char* edit_program = "edit"; ///< Имя программы слота 1 в библиотеке: её подменяет редактор.
+constexpr const char* edit_program = "edit"; ///< Как слот редактора называется в HUD (в библиотеке программа носит имя по хешу: `#…`).
 constexpr float view_meters = 56.0f;         ///< Сколько метров мира по высоте экрана.
 
 Color mix(Color a, Color b, float t) {
@@ -115,26 +121,40 @@ public:
         const std::string autosave_path = arg("--autosave", autoplay ? "rune_cell2_autoplay.fluxlog" : "rune_cell2_autosave.fluxlog");
 
         SpellSim::register_commands(command_registry);
-        auto parsed = Replay::Session::from_args(args, 1, &command_registry);
+        if (const std::string id = arg("--level", ""); !id.empty()) {
+            level = Challenge::find_level(id);
+            if (level == nullptr) throw std::runtime_error("нет уровня «" + id + "» (walk | mine | mound | fort)");
+        }
+        bot = std::ranges::find(args, "--bot") != args.end();
+        auto parsed = Replay::Session::from_args(args, level != nullptr ? level->config.seed : 1, &command_registry);
         if (!parsed) throw std::runtime_error(parsed.error());
         session.emplace(std::move(*parsed));
-        locked = session->mode() != Replay::Session::Mode::Off;
+        locked = session->mode() == Replay::Session::Mode::Replay; // в повторе правок нет: программы приходят блобами записи
 
-        // Слот 1 — программа «edit»: её содержимое всегда последний собравшийся граф редактора.
-        SpellSim::Config config{.seed = session->seed()};
-        config.grimoire = {edit_program, "mound", "siphon"};
+        // Слот редактора — последний собравшийся граф: он уходит командой SetProgram (в запись и в сеть), а не подменой в библиотеке.
+        SpellSim::Config config = level != nullptr ? level->config : SpellSim::Config{.seed = session->seed()};
+        config.seed = session->seed();
+        if (level == nullptr) config.grimoire = {"", "mound", "siphon"};
+        edit_slot = level != nullptr ? 1 : 0;
+        slot = level != nullptr && !level->library.empty() ? 0 : edit_slot;
         sim = std::make_unique<SpellSim::Simulation>(config);
         sim->declare(app.bus());
         const es::ModuleId me = app.bus().declare_module("RuneCell2").consumes<Runes::SpellFailedEvent>();
         failures = app.bus().reader<Runes::SpellFailedEvent>(me);
-        sim->reload_spells(RUNE_CELL2_SPELLS_DIR); // готовые графы каталога: слоты 2–3 (mound, siphon)
+        if (level != nullptr) {
+            Challenge::install_library(*level, *sim);
+            referee.emplace(*level);
+            if (bot) bot_solution = Challenge::reference_solution(level->id);
+        } else {
+            sim->reload_spells(RUNE_CELL2_SPELLS_DIR); // готовые графы каталога: слоты 2–3 (mound, siphon)
+        }
         recorder.install_assert_dump("flight_recorder_rune_cell2.txt");
         driver.emplace(*sim, *session, &recorder);
 
         load_start_graph(std::ranges::find(args, "--recover") != args.end() ? autosave_path : std::string{});
         refresh();
         // Автосохранение редактора — журнал с избыточностью. В записи/повторе правок нет — нечего сохранять.
-        if (!locked) {
+        if (!locked && !bot) {
             storage = EventLog::FileStorage::open(autosave_path, EventLog::FileStorage::Mode::Create);
             if (storage) {
                 if (auto started = ed::Autosave::start(*storage, editor)) autosave.emplace(std::move(*started));
@@ -152,6 +172,7 @@ public:
         ring = app.renderer().create_texture(Procedural::circle_image(64, Colors::white, 3.0f), {.filter = TextureFilter::Linear});
         editor_view.emplace(app.renderer());
         (void)sim->take_dirty_chunks(); // стартовый мир уже учтён целиком
+        if (level != nullptr) std::println("RuneCell2: уровень «{}» — {}\n  {}", level->id, level->title, level->brief);
         std::println("RuneCell2: seed {} | {} | граф: {} узлов{} | автосохранение: {}", session->seed(),
                      locked ? (session->mode() == Replay::Session::Mode::Replay ? "REPLAY" : "RECORD") : "live", editor.graph().nodes().size(),
                      analysis.ok() ? ", собран" : ", НЕ собран", autosave ? autosave_path : "выкл");
@@ -197,13 +218,23 @@ public:
         const std::uint32_t t = sim->tick_number();
         live.clear();
         if (!driver->replaying()) {
-            if (autoplay) gather_autoplay(t);
+            if (bot && bot_solution != nullptr) gather_bot(t);
+            else if (autoplay) gather_autoplay(t);
             else gather_live();
+            live.insert(live.begin(), pending_set.begin(), pending_set.end()); // правки редактора идут первыми: каст этого же тика уже видит новую программу
+            pending_set.clear();
         }
         const std::uint64_t casts_before = sim->casts();
         if (!driver->step(live)) {
             app.window().request_close();
             return;
+        }
+        if (referee) {
+            const Challenge::Status before = referee->status();
+            referee->observe(*sim);
+            if (before == Challenge::Status::Running && referee->status() != Challenge::Status::Running) {
+                std::println("Level {}: {} — {}", level->id, referee->status() == Challenge::Status::Won ? "WON" : "LOST", referee->status_line());
+            }
         }
         for (const Terrain::ChunkCoord c : sim->take_dirty_chunks()) {
             if (heights->update(*height_source, WorldRender::TerrainHeights::cells_of_chunk(c, *heights)) > 0) heights_dirty = true;
@@ -311,7 +342,13 @@ private:
         if (editor.revision() == analyzed_revision) return;
         analyzed_revision = editor.revision();
         analysis = ed::analyze(editor.graph(), sim->config().runes, edit_program);
-        if (analysis.ok()) sim->programs().add_program(edit_program, *analysis.program);
+        if (!analysis.ok() || locked || bot) return;
+        // Собралось: программа уходит блобом (в запись и в симуляцию), а в поток команд — SetProgram с её хешем. Тот же граф дважды не шлём.
+        const std::vector<std::byte> bytes = Runes::encode_program(*analysis.program);
+        const std::uint64_t hash = Math::content_hash(bytes);
+        if (sent_program && *sent_program == hash) return;
+        sent_program = driver->submit_blob(bytes);
+        pending_set.push_back(SpellSim::set_program_command(edit_slot, hash));
     }
 
     void editor_input(const WindowSystem::InputState& in, glm::vec2 vp) {
@@ -379,7 +416,7 @@ private:
     /// Какие узлы сработали при последнем касте: карта «руна → узел» из компиляции графа.
     void light_up_trace() {
         const Runes::SpellTrace& trace = sim->spells().last_trace();
-        if (!trace.valid || trace.program != edit_program) return;
+        if (!trace.valid || !analysis.ok() || trace.program != Runes::program_name_for_hash(Runes::program_hash(*analysis.program))) return; // подсвечиваем, только если исполнялся показанный граф
         for (const auto& entry : trace.entries) {
             if (entry.pc < analysis.source.size()) glow[analysis.source[entry.pc]] = 1.0f;
         }
@@ -421,6 +458,16 @@ private:
         return {c.x + static_cast<double>(cursor.x - vp.x * 0.5f) * view_meters / static_cast<double>(vp.y), c.y + static_cast<double>(cursor.y - vp.y * 0.5f) * view_meters / static_cast<double>(vp.y)};
     }
 
+    /// Бот уровня: программы эталонного решения на тике 0 (блоб + SetProgram), затем его прицел и шаги.
+    void gather_bot(std::uint32_t t) {
+        if (t == 0) {
+            for (const auto& [bot_slot, text] : bot_solution->programs) {
+                if (const auto program = Runes::parse_program(text)) live.push_back(SpellSim::set_program_command(bot_slot, driver->submit_blob(Runes::encode_program(*program))));
+            }
+        }
+        if (bot_solution->policy) bot_solution->policy(*sim, live);
+    }
+
     void gather_live() {
         if (wish.x != sent_wish.x || wish.z != sent_wish.z) {
             live.push_back(SpellSim::move_command(wish.x, wish.z));
@@ -429,7 +476,7 @@ private:
         if (pending_jump) live.push_back(SpellSim::jump_command());
         if (pending_cast) {
             if (!editor_open) last_aim_world = cursor_world(last_viewport);
-            live.push_back(SpellSim::cast_command(editor_open ? 0 : slot, *pending_cast, aim_towards(last_aim_world.x, last_aim_world.y)));
+            live.push_back(SpellSim::cast_command(editor_open ? edit_slot : slot, *pending_cast, aim_towards(last_aim_world.x, last_aim_world.y)));
         }
         pending_jump = false;
         pending_cast.reset();
@@ -475,6 +522,10 @@ private:
             lines.push_back(std::format("last spell '{}' [{}]: {} runes, {:.1f} mana, {}", trace.program, trace.source == Runes::ManaSource::Ambient ? "ambient" : "personal", trace.runes_executed,
                                         trace.spent.to_double(), trace.status == Runes::Status::Failed ? std::string(Runes::failure_text(trace.failure)) : "ok"));
         }
+        if (referee) {
+            lines.push_back(referee->status_line());
+            if (referee->status() == Challenge::Status::Running && sim->tick_number() < 60 * 12) lines.push_back(level->brief);
+        }
         if (!analysis.ok() && analysis.error) lines.push_back("edit slot uses the previous valid graph: " + analysis.error->format());
         overlay::panel(r, font, {10.0f, editor_open ? palette_height + 20.0f : 10.0f}, lines, 15.0f);
 
@@ -485,7 +536,7 @@ private:
         for (int i = 0; i < Character::Grimoire::slot_count; ++i) {
             const glm::vec2 at = base + glm::vec2{static_cast<float>(i) * (bar_width / 3.0f), 22.0f};
             r.fill_rect({at, {bar_width / 3.0f - 6.0f, 30.0f}}, i == slot ? Color{90, 70, 200, 220} : Color{0, 0, 0, 150}, 10);
-            r.draw_text(font, std::format("{} {}", i + 1, names[static_cast<std::size_t>(i)]), at + glm::vec2{8.0f, 6.0f}, {.size = 15.0f, .layer = 12});
+            r.draw_text(font, std::format("{} {}", i + 1, names[static_cast<std::size_t>(i)].starts_with('#') ? std::string(edit_program) : names[static_cast<std::size_t>(i)]), at + glm::vec2{8.0f, 6.0f}, {.size = 15.0f, .layer = 12});
         }
         if (sim->tick_number() < failure_until) r.draw_text(font, last_failure, {vp.x * 0.5f - 130.0f, vp.y * 0.5f + 60.0f}, {.size = 18.0f, .color = Color::from_rgba(0xFF7070FF), .layer = 12, .shadow = Colors::black});
         (void)app;
@@ -548,7 +599,8 @@ private:
         editor.set_entry(carve);
         drag({carve, ed::PortKind::Next, 0}, {halt, ed::PortKind::Input, 0});
         refresh();
-        expect("граф без радиуса не собирается, слот 1 держит прежнюю программу", !analysis.ok() && sim->programs().find(edit_program) != nullptr);
+        expect("граф без радиуса не собирается, слот 1 держит прежнюю программу",
+               !analysis.ok() && sim->programs().find(sim->world().get<Character::Grimoire>(sim->player())->slots[0]) != nullptr && sim->programs_set() >= 1);
         drag({radius, ed::PortKind::Output, 0}, {carve, ed::PortKind::Input, 1});
         refresh();
         expect("после подключения радиуса граф собран", analysis.ok());
@@ -560,6 +612,7 @@ private:
 
     void autoplay_after_cast() {
         const Math::Mana pool = sim->world().get<Character::ManaPool>(sim->player())->current;
+        expect("правки редактора дошли до мира командой SetProgram", sim->programs_set() >= 2 && sim->rejected_programs() == 0);
         expect("выстрел графом изменил ландшафт", sim->hashes().at("terrain") != hash_before_cast);
         expect("выстрел потратил личную ману", pool < mana_before_cast);
         expect("трасса подсветила узлы графа", !glow.empty() && glow.contains(carve_node));
@@ -631,7 +684,13 @@ private:
     std::vector<Replay::Command> live;
     std::optional<Runes::ManaSource> pending_cast;
     bool pending_jump = false;
-    int slot = 0;
+    int slot = 0, edit_slot = 0;                     ///< Выбранный слот; слот, куда редактор ставит граф.
+    const Challenge::Level* level = nullptr;         ///< Уровень (`--level`); без него — свободная песочница.
+    std::optional<Challenge::Referee> referee;
+    bool bot = false;
+    const Challenge::Solution* bot_solution = nullptr;
+    std::vector<Replay::Command> pending_set;        ///< SetProgram от редактора: уйдут в начале ближайшего тика.
+    std::optional<std::uint64_t> sent_program;       ///< Хеш последней отправленной программы редактора.
     bool editor_open = false, locked = false, autoplay = false, needs_frame = true;
     glm::vec2 cursor{0.0f}, last_viewport{1280.0f, 720.0f};
     glm::dvec2 last_aim_world{64.0, 64.0};

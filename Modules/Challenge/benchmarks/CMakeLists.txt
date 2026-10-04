@@ -1,0 +1,2 @@
+add_executable(ChallengeBenchmarks benchmark_main.cpp)
+target_link_libraries(ChallengeBenchmarks PRIVATE engine::Challenge ChallengeOptions benchmark::benchmark)

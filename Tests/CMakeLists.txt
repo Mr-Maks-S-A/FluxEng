@@ -8,6 +8,8 @@
 #   JobSystem + MemorySystem + ECSSystem  параллельная система над пулом ECS: арены потоков, ChunkBuffers,
 #     + EventSystem                       одинаковый результат при 0, 1 и N потоках
 #   MemorySystem + EventSystem            память тика (DoubleArena) живёт ровно столько же, сколько событие
+#   Net + SpellSim + Challenge +          партия «пилот и писарь» по плохой сети: миры совпадают побитно, правки заклинаний
+#     Replay                              идут командами SetProgram, партию можно записать и воспроизвести
 #   CardDuel (Sandbox) + JobSystem        партия ИИ против ИИ: инварианты правил, детерминизм при любом
 #     + MemorySystem + EventSystem        числе потоков, журнал через шину
 #   WindowSystem + RendererSystem   [gpu] скрытое окно, Renderer3D + Renderer2D + шрифт + Framebuffer + PNG,
@@ -22,10 +24,11 @@ add_executable(IntegrationTests
     integration/test_jobs_memory_ecs.cpp
     integration/test_tick_memory.cpp
     integration/test_card_duel.cpp
+    integration/test_net_spellsim.cpp
     integration/test_render_pipeline.cpp
     integration/test_core_app.cpp
 )
-target_link_libraries(IntegrationTests PRIVATE engine::Core engine::ECSSystem CardDuelRules doctest::doctest)
+target_link_libraries(IntegrationTests PRIVATE engine::Core engine::ECSSystem engine::Net engine::Challenge CardDuelRules doctest::doctest)
 target_compile_features(IntegrationTests PRIVATE cxx_std_23)
 if(MSVC)
     target_compile_options(IntegrationTests PRIVATE /W4 /utf-8)

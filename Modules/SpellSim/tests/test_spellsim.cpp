@@ -323,7 +323,7 @@ TEST_CASE("типизированные команды: encode и decode туд�
 
     Replay::CommandRegistry registry;
     register_commands(registry);
-    CHECK(registry.schemas().size() == 3);
+    CHECK(registry.schemas().size() == 4);
     CHECK(registry.format(move.encode()) == "move dx=0.5 dz=-0.75");
     CHECK(registry.format(jump_command()) == "jump");
     CHECK(registry.format(cast.encode()).starts_with("cast slot_source=258 "));
