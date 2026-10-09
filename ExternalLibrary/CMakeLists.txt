@@ -10,7 +10,7 @@ project(ExternalLibrary CXX)
 # ------------------------------------------------------------------------------
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/FluxModule.cmake")
 
-foreach(library IN ITEMS doctest fmt spdlog benchmark glad glfw glm stb)
+foreach(library IN ITEMS doctest fmt spdlog benchmark glad glfw glm stb cgltf)
     flux_external(${library})
 endforeach()
 
@@ -28,4 +28,5 @@ target_link_libraries(ExternalLibrary INTERFACE
     glfw
     glm::glm
     stb
+    cgltf::cgltf
 )

@@ -33,6 +33,7 @@ set_property(GLOBAL PROPERTY FLUX_TARGET_glfw      glfw)
 set_property(GLOBAL PROPERTY FLUX_TARGET_glm       glm::glm)
 set_property(GLOBAL PROPERTY FLUX_TARGET_glad      glad)
 set_property(GLOBAL PROPERTY FLUX_TARGET_stb       stb)
+set_property(GLOBAL PROPERTY FLUX_TARGET_cgltf     cgltf::cgltf)
 
 # ------------------------------------------------------------------------------
 # flux_module_option(<VAR> <описание>)
