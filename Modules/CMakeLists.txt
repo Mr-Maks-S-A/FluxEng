@@ -7,6 +7,7 @@ add_subdirectory( MemorySystem )     # аллокаторы (ZII): без зав
 add_subdirectory( JobSystem )        # задачи и параллельные циклы: MemorySystem
 add_subdirectory( EventSystem )
 add_subdirectory( RuntimeSystem )    # ядро без графики: тик, модули, шина, задачи, память
+add_subdirectory( InputSystem )      # ввод: собственные коды, состояние, ActionMap, команда ввода, запись
 add_subdirectory( AssetSystem )      # ассеты: VFS, пак, PNG/JPG, glTF, менеджер с кешем и фоновой загрузкой
 add_subdirectory( NetSystem )        # сеть: транспорт, имитация сети, детерминированный lockstep
 add_subdirectory( WindowSystem )
