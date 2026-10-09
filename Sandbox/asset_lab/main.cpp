@@ -26,6 +26,9 @@
 #include <string>
 #include <vector>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace as = AssetSystem;
 namespace fs = std::filesystem;
 namespace rs = RuntimeSystem;
@@ -153,8 +156,8 @@ public:
     void frame(Core::App& app, float) override {
         m_module->assets().pump(); // здесь, в главном потоке, выполняются on_done: заливка в GPU
         const auto& input = app.window().input();
-        if (input.pressed(GLFW_KEY_R)) reload();
-        if (input.pressed(GLFW_KEY_SPACE)) m_spin = !m_spin;
+        if (input.pressed(Key::R)) reload();
+        if (input.pressed(Key::Space)) m_spin = !m_spin;
     }
 
     void tick(Core::App& app) override {
@@ -294,7 +297,7 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    return Core::run<AssetLab>({.title = "AssetLab", .ticks_per_second = 60.0, .pause_key = 0, .camera_controls = false,
+    return Core::run<AssetLab>({.title = "AssetLab", .ticks_per_second = 60.0, .pause_key = InputSystem::Key::Unknown, .camera_controls = false,
                                 .clear_rgba = 0x101018FF},
                                argc, argv);
 }

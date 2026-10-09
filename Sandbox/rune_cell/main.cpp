@@ -54,6 +54,9 @@
 #include <unordered_map>
 #include <vector>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 namespace ms = MemorySystem;
 namespace js = JobSystem;
@@ -1016,25 +1019,25 @@ struct PlayerInput {
 
     void tick(ECS::World& world) {
         for (const Core::KeyEvent& k : keys.events()) {
-            if (k.action != GLFW_PRESS) continue;
-            if (k.key >= GLFW_KEY_1 && k.key <= GLFW_KEY_5) selected = static_cast<Element>(k.key - GLFW_KEY_1);
-            if (k.key == GLFW_KEY_A) autoplay = !autoplay;
-            if (k.key == GLFW_KEY_N) new_cell = true;
-            if (k.key == GLFW_KEY_SPACE) {
+            if (!k.pressed()) continue;
+            if (const int digit = InputSystem::digit_value(k.code()); digit >= 1 && digit <= 5) selected = static_cast<Element>(digit - 1);
+            if (k.code() == Key::A) autoplay = !autoplay;
+            if (k.code() == Key::N) new_cell = true;
+            if (k.code() == Key::Space) {
                 if (const ECS::Entity c = cell_at(world, pointer)) cast_out.emit({c.index, c.generation});
             }
-            if (k.key == GLFW_KEY_X) {
+            if (k.code() == Key::X) {
                 if (const ECS::Entity r = rune_at(world, pointer)) remove_out.emit({r.index, r.generation});
             }
         }
         for (const Core::MouseButtonEvent& m : clicks.events()) {
             const glm::vec2 at{m.world_x, m.world_y};
-            if (m.button == GLFW_MOUSE_BUTTON_LEFT && m.action == GLFW_PRESS) {
+            if (m.which() == MouseButton::Left && m.pressed()) {
                 inject_out.emit({at.x, at.y, static_cast<std::uint8_t>(selected)});
-            } else if (m.button == GLFW_MOUSE_BUTTON_RIGHT && m.action == GLFW_PRESS) {
+            } else if (m.which() == MouseButton::Right && m.pressed()) {
                 drag_from = rune_at(world, at);
                 drag_start = at;
-            } else if (m.button == GLFW_MOUSE_BUTTON_RIGHT && m.action == GLFW_RELEASE && drag_from) {
+            } else if (m.which() == MouseButton::Right && m.released() && drag_from) {
                 const ECS::Entity to = rune_at(world, at);
                 if (to && to != drag_from) {
                     bond_out.emit(request(drag_from, to, +1));
@@ -1394,7 +1397,7 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    return Core::run<RuneCell>({.title = "RuneCell", .width = 1600, .height = 900, .ticks_per_second = 60.0, .pause_key = GLFW_KEY_P,
+    return Core::run<RuneCell>({.title = "RuneCell", .width = 1600, .height = 900, .ticks_per_second = 60.0, .pause_key = InputSystem::Key::P,
                                 .camera_controls = false, .clear_rgba = 0x101418FF},
                                argc, argv);
 }

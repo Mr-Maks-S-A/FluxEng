@@ -54,6 +54,9 @@
 #include <unordered_map>
 #include <vector>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 namespace ms = MemorySystem;
 namespace js = JobSystem;
@@ -623,7 +626,7 @@ bool move_axis(const Terrain& terrain, glm::vec3& pos, int axis, float delta) {
 
 struct Controller {
     es::EventReader<Core::KeyEvent> keys;
-    std::array<bool, GLFW_KEY_LAST + 1> held{}; ///< Состояние клавиш, собранное из событий (детерминированно).
+    std::array<bool, InputSystem::kKeyCount> held{}; ///< Состояние клавиш, собранное из событий (детерминированно).
     bool autopilot = false;
     float yaw = 0.0f;   ///< Обзор приходит из домена кадра (мышь), см. Voxel::render.
     float pitch = 0.0f;
@@ -633,10 +636,10 @@ struct Controller {
     void tick(ECS::World& world, ECS::Entity player, const Terrain& terrain, float dt) {
         auto& state = *world.get<PlayerState>(player);
         for (const Core::KeyEvent& k : keys.events()) {
-            if (k.key < 0 || k.key > GLFW_KEY_LAST) continue;
-            if (k.action == GLFW_PRESS) held[static_cast<std::size_t>(k.key)] = true;
-            if (k.action == GLFW_RELEASE) held[static_cast<std::size_t>(k.key)] = false;
-            if (k.action == GLFW_PRESS && k.key == GLFW_KEY_F) state.flying = !state.flying;
+            if (static_cast<std::size_t>(k.key) >= InputSystem::kKeyCount) continue;
+            if (k.pressed()) held[static_cast<std::size_t>(k.key)] = true;
+            if (k.released()) held[static_cast<std::size_t>(k.key)] = false;
+            if (k.pressed() && k.code() == Key::F) state.flying = !state.flying;
         }
         Transform& t = *world.get<Transform>(player);
         glm::vec3& v = world.get<Velocity>(player)->value;
@@ -650,24 +653,24 @@ struct Controller {
         const glm::vec3 forward{std::cos(yaw), 0.0f, std::sin(yaw)};
         const glm::vec3 right{-forward.z, 0.0f, forward.x};
         glm::vec3 wish{0.0f};
-        const auto down = [&](int key) { return held[static_cast<std::size_t>(key)]; };
-        if (down(GLFW_KEY_W) || autopilot) wish += forward;
-        if (down(GLFW_KEY_S)) wish -= forward;
-        if (down(GLFW_KEY_D)) wish += right;
-        if (down(GLFW_KEY_A)) wish -= right;
+        const auto down = [&](Key key) { return held[static_cast<std::size_t>(key)]; };
+        if (down(Key::W) || autopilot) wish += forward;
+        if (down(Key::S)) wish -= forward;
+        if (down(Key::D)) wish += right;
+        if (down(Key::A)) wish -= right;
         if (glm::dot(wish, wish) > 0.0f) wish = glm::normalize(wish);
 
         if (state.flying) {
             const float speed = autopilot ? 24.0f : 12.0f;
             v = wish * speed;
-            if (down(GLFW_KEY_SPACE)) v.y = speed;
-            if (down(GLFW_KEY_LEFT_SHIFT)) v.y = -speed;
+            if (down(Key::Space)) v.y = speed;
+            if (down(Key::LeftShift)) v.y = -speed;
             if (autopilot) v.y = (48.0f + static_cast<float>(terrain_height(static_cast<int>(t.position.x), static_cast<int>(t.position.z))) * 0.5f - t.position.y) * 2.0f;
         } else {
             v.x = wish.x * 4.6f;
             v.z = wish.z * 4.6f;
             v.y = std::max(v.y - 26.0f * dt, -50.0f);
-            if (state.on_ground && down(GLFW_KEY_SPACE)) v.y = 8.4f;
+            if (state.on_ground && down(Key::Space)) v.y = 8.4f;
         }
         state.on_ground = false;
         for (int axis : {1, 0, 2}) {
@@ -709,15 +712,15 @@ struct Interaction {
             }
         }
         for (const Core::KeyEvent& k : keys.events())
-            if (k.action == GLFW_PRESS && k.key >= GLFW_KEY_1 && k.key <= GLFW_KEY_8) selected = static_cast<std::size_t>(k.key - GLFW_KEY_1);
+            if (const int digit = InputSystem::digit_value(k.code()); k.pressed() && digit >= 1 && digit <= 8) selected = static_cast<std::size_t>(digit - 1);
         for (const Core::MouseButtonEvent& m : mouse.events()) {
-            if (m.action != GLFW_PRESS || !captured) continue; // мышь в свободном режиме блоки не трогает
+            if (!m.pressed() || !captured) continue; // мышь в свободном режиме блоки не трогает
             const std::optional<RayHit> hit = raycast(terrain, eye, dir, 6.0f);
             if (!hit) continue;
-            if (m.button == GLFW_MOUSE_BUTTON_LEFT) {
+            if (m.which() == MouseButton::Left) {
                 out.emit(BlockEditEvent{.x = hit->block.x, .y = hit->block.y, .z = hit->block.z, .block = Air});
                 ++broken;
-            } else if (m.button == GLFW_MOUSE_BUTTON_RIGHT) {
+            } else if (m.which() == MouseButton::Right) {
                 const glm::ivec3 b = hit->before;
                 // Нельзя поставить блок в себя.
                 const bool inside = static_cast<float>(b.x) + 1.0f > feet.x - player_half_width && static_cast<float>(b.x) < feet.x + player_half_width &&
@@ -1010,7 +1013,7 @@ public:
     void frame(Core::App& app, float /*seconds*/) override {
         // Обзор мышью — в домене кадра (плавно при любой частоте тиков).
         WindowSystem::Window& window = app.window();
-        if (window.input().pressed(GLFW_KEY_TAB)) capture(app, !captured);
+        if (window.input().pressed(Key::Tab)) capture(app, !captured);
         if (captured && !controller.autopilot) {
             const WindowSystem::Vec2d d = window.input().cursor_delta();
             controller.yaw += static_cast<float>(d.x) * 0.0025f;
@@ -1120,7 +1123,7 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    return Core::run<Voxel>({.title = "Voxel", .ticks_per_second = 60.0, .pause_key = GLFW_KEY_P, .camera_controls = false,
+    return Core::run<Voxel>({.title = "Voxel", .ticks_per_second = 60.0, .pause_key = InputSystem::Key::P, .camera_controls = false,
                              .clear_rgba = 0x8CBDF2FF},
                             argc, argv);
 }

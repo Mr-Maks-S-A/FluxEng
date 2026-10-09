@@ -28,6 +28,9 @@
 #include <span>
 #include <string_view>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 using namespace RendererSystem;
 
@@ -130,10 +133,10 @@ struct Brush {
 
     void tick(const Core::FrameInput& input) {
         for (const Core::KeyEvent& key : keys.events()) {
-            if (key.action != GLFW_PRESS) continue;
-            if (key.key >= GLFW_KEY_1 && key.key <= GLFW_KEY_5) material = static_cast<Material>(key.key - GLFW_KEY_1 + 1);
-            if (key.key == GLFW_KEY_LEFT_BRACKET) radius = std::max(radius - 1, 0);
-            if (key.key == GLFW_KEY_RIGHT_BRACKET) radius = std::min(radius + 1, 12);
+            if (!key.pressed()) continue;
+            if (const int digit = InputSystem::digit_value(key.code()); digit >= 1 && digit <= 5) material = static_cast<Material>(digit);
+            if (key.code() == Key::LeftBracket) radius = std::max(radius - 1, 0);
+            if (key.code() == Key::RightBracket) radius = std::min(radius + 1, 12);
         }
         if (input.down[0] || input.down[1]) {
             out.emit(PaintEvent{.x = static_cast<std::int32_t>(input.mouse_world.x / Grid::cell),

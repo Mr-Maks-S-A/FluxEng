@@ -2,7 +2,7 @@
 foreach(example IN ITEMS 01_window_input 02_input_replay)
     set(target WindowSystemExample_${example})
     add_executable(${target} ${example}.cpp)
-    target_link_libraries(${target} PRIVATE engine::WindowSystem WindowSystemOptions)
+    target_link_libraries(${target} PRIVATE engine::WindowSystem WindowSystemOptions glad)
 endforeach()
 
 if(WINDOWSYSTEM_BUILD_TESTS)

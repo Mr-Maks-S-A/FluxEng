@@ -3,6 +3,9 @@
  * Окно, кадр, ввод опросом и подписками. `--frames N` — выйти через N кадров (smoke-тест).
  */
 
+// Платформенных заголовков в Window.hpp нет: GL-функции нужны этому примеру (glClear), поэтому подключаем glad сами.
+#include <glad/glad.h>
+
 #include <WindowSystem/Window.hpp>
 
 #include <cstdlib>
@@ -24,8 +27,9 @@ int main(int argc, char** argv) {
     WindowSystem::Window& window = *created;
 
     // Подписки: сколько угодно обработчиков на одно событие.
-    window.events().key.subscribe([&](int key, int action) {
-        if (key == GLFW_KEY_ESCAPE && action == WindowSystem::action_press) window.request_close();
+    using InputSystem::Key;
+    window.events().key.subscribe([&](Key key, InputSystem::Transition transition) {
+        if (key == Key::Escape && transition == InputSystem::Transition::Press) window.request_close();
     });
     window.events().framebuffer_resized.subscribe(
         [](int width, int height) { std::println("framebuffer resized: {}x{}", width, height); });
@@ -33,11 +37,11 @@ int main(int argc, char** argv) {
     const double start = WindowSystem::Window::time();
     for (int frame = 0; !window.should_close() && frame != max_frames; ++frame) {
         window.poll_events();
-        const WindowSystem::InputState& input = window.input();
+        const InputSystem::InputState& input = window.input();
 
         // Опрос: состояние за кадр.
-        if (input.pressed(GLFW_KEY_SPACE)) std::println("space pressed at {:.2f} s", WindowSystem::Window::time() - start);
-        if (input.mouse_pressed(GLFW_MOUSE_BUTTON_LEFT)) {
+        if (input.pressed(Key::Space)) std::println("space pressed at {:.2f} s", WindowSystem::Window::time() - start);
+        if (input.mouse_pressed(InputSystem::MouseButton::Left)) {
             const WindowSystem::Vec2d fb = window.cursor_in_framebuffer();
             std::println("click at framebuffer ({:.0f}, {:.0f})", fb.x, fb.y);
         }

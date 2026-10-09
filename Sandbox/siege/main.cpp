@@ -54,6 +54,9 @@
 #include <string_view>
 #include <vector>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 namespace ms = MemorySystem;
 namespace js = JobSystem;
@@ -800,11 +803,11 @@ struct Economy {
         }
 
         for (const Core::KeyEvent& key : keys.events())
-            if (key.action == GLFW_PRESS && key.key == GLFW_KEY_B) auto_build = !auto_build;
+            if (key.pressed() && key.code() == Key::B) auto_build = !auto_build;
         for (const Core::MouseButtonEvent& m : mouse.events()) {
-            if (m.action != GLFW_PRESS || m.button > GLFW_MOUSE_BUTTON_RIGHT) continue;
+            if (!m.pressed() || (m.which() != MouseButton::Left && m.which() != MouseButton::Right)) continue;
             const glm::ivec2 t = tile_of({m.world_x, m.world_y});
-            const TowerKind kind = m.button == GLFW_MOUSE_BUTTON_LEFT ? TowerKind::Archer : TowerKind::Mortar;
+            const TowerKind kind = m.which() == MouseButton::Left ? TowerKind::Archer : TowerKind::Mortar;
             if (try_build(t.x, t.y, kind)) ++player_built;
         }
         if (auto_build && now % 5 == 0) {
@@ -918,9 +921,9 @@ struct Settings {
     void declare(es::EventBus& bus) { keys = bus.reader<Core::KeyEvent>(bus.declare_module("Settings").consumes<Core::KeyEvent>()); }
     void tick() {
         for (const Core::KeyEvent& key : keys.events()) {
-            if (key.action != GLFW_PRESS) continue;
-            if (key.key == GLFW_KEY_T) parallel = !parallel;
-            if (key.key == GLFW_KEY_F) show_flow = !show_flow;
+            if (!key.pressed()) continue;
+            if (key.code() == Key::T) parallel = !parallel;
+            if (key.code() == Key::F) show_flow = !show_flow;
         }
     }
 };

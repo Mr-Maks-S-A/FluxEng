@@ -5,6 +5,7 @@
 #include <optional>
 #include <utility>
 
+using namespace InputSystem;
 using WindowSystem::Window;
 using WindowSystem::WindowConfig;
 
@@ -37,7 +38,7 @@ TEST_CASE("пустое окно (ZII): все запросы безопасны
     window.swap_buffers();
     window.request_close();
     window.set_title("ignored");
-    CHECK_FALSE(window.input().down(0));
+    CHECK_FALSE(window.input().down(Key::A));
 }
 
 TEST_CASE("создание: размеры, заголовок, vsync, закрытие") {
@@ -47,6 +48,7 @@ TEST_CASE("создание: размеры, заголовок, vsync, закр
     CHECK(open_before >= 1);
 
     CHECK(window->native_handle() != nullptr);
+    CHECK(window->backend() == WindowSystem::WindowBackend::Glfw);
     CHECK(window->title() == "test");
     CHECK(window->window_size().width == 320);
     CHECK(window->framebuffer_size().width > 0);
@@ -83,37 +85,37 @@ TEST_CASE("внедрённые события идут тем же путём: 
 
     int keys = 0;
     int last_key = 0;
-    window->events().key.subscribe([&](int key, int) {
+    window->events().key.subscribe([&](Key key, Transition) {
         ++keys;
-        last_key = key;
+        last_key = static_cast<int>(key);
     });
-    window->events().key.subscribe([&](int, int) { ++keys; }); // второй слушатель
+    window->events().key.subscribe([&](Key, Transition) { ++keys; }); // второй слушатель
 
     window->poll_events();
-    window->inject_key(GLFW_KEY_SPACE, GLFW_PRESS);
+    window->inject_key(Key::Space, Transition::Press);
     window->inject_scroll(0.0, 2.0);
     window->inject_cursor(10.0, 20.0);
 
     CHECK(keys == 2);
-    CHECK(last_key == GLFW_KEY_SPACE);
-    CHECK(window->input().pressed(GLFW_KEY_SPACE));
+    CHECK(last_key == static_cast<int>(Key::Space));
+    CHECK(window->input().pressed(Key::Space));
     CHECK(window->input().scroll().y == 2.0);
     CHECK(window->input().cursor().x == 10.0);
 
     window->poll_events(); // новый кадр
-    CHECK_FALSE(window->input().pressed(GLFW_KEY_SPACE));
-    CHECK(window->input().down(GLFW_KEY_SPACE));
+    CHECK_FALSE(window->input().pressed(Key::Space));
+    CHECK(window->input().down(Key::Space));
 }
 
 TEST_CASE("Esc закрывает окно только с close_on_escape") {
     auto plain = hidden_window();
     if (!plain) return;
-    plain->inject_key(GLFW_KEY_ESCAPE, GLFW_PRESS);
+    plain->inject_key(Key::Escape, Transition::Press);
     CHECK_FALSE(plain->should_close());
 
     auto closing = hidden_window({.close_on_escape = true});
     REQUIRE(closing);
-    closing->inject_key(GLFW_KEY_ESCAPE, GLFW_PRESS);
+    closing->inject_key(Key::Escape, Transition::Press);
     CHECK(closing->should_close());
 }
 
@@ -121,13 +123,13 @@ TEST_CASE("перемещение: обработчики продолжают �
     auto window = hidden_window();
     if (!window) return;
     int calls = 0;
-    window->events().key.subscribe([&](int, int) { ++calls; });
+    window->events().key.subscribe([&](Key, Transition) { ++calls; });
 
     Window moved = std::move(*window);
     CHECK_FALSE(*window);
-    moved.inject_key(GLFW_KEY_A, GLFW_PRESS);
+    moved.inject_key(Key::A, Transition::Press);
     CHECK(calls == 1);
-    CHECK(moved.input().down(GLFW_KEY_A));
+    CHECK(moved.input().down(Key::A));
 }
 
 }

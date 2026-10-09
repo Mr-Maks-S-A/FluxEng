@@ -10,6 +10,12 @@
 #include <RendererSystem/RendererSystem.hpp>
 #include <WindowSystem/Window.hpp>
 
+// Контекст OpenGL этому тесту нужен «на руках»: Window платформенных заголовков больше не раскрывает, поэтому GLFW — здесь.
+// clang-format off
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+// clang-format on
+
 #include <glm/ext/matrix_transform.hpp>
 
 #include <doctest/doctest.h>
@@ -56,7 +62,7 @@ std::vector<Backend3D>& backends() {
         }
         return out;
     }();
-    if (gl_window() != nullptr) glfwMakeContextCurrent(gl_window()->native_handle()); // Core::App из соседних тестов мог сменить контекст
+    if (gl_window() != nullptr) glfwMakeContextCurrent(static_cast<GLFWwindow*>(gl_window()->native_handle())); // Core::App из соседних тестов мог сменить контекст
     return list;
 }
 

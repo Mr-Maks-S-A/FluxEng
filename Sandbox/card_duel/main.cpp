@@ -58,6 +58,9 @@
 #include <unordered_map>
 #include <vector>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 namespace ms = MemorySystem;
 namespace cd = CardDuel;
@@ -807,24 +810,24 @@ struct PlayerInput {
         can_act = !match.over() && match.active == 0 && !autoplay && !director_busy && gate.ready(now);
         if (toast_ticks > 0) --toast_ticks;
         for (const Core::KeyEvent& k : keys.events()) {
-            if (k.action != GLFW_PRESS) continue;
-            if (k.key == GLFW_KEY_T) {
+            if (!k.pressed()) continue;
+            if (k.code() == Key::T) {
                 autoplay = !autoplay;
                 say(autoplay ? "Автоигра: ИИ играет за вас" : "Автоигра выключена");
                 selection = {};
-            } else if (k.key == GLFW_KEY_R) {
+            } else if (k.code() == Key::R) {
                 restart = true;
-            } else if (k.key == GLFW_KEY_E && can_act) {
+            } else if (k.code() == Key::E && can_act) {
                 send({.kind = static_cast<std::uint8_t>(cd::ActionKind::EndTurn), .player = 0}, gate, now);
             }
         }
         for (const Core::MouseButtonEvent& c : clicks.events()) {
-            if (c.action != GLFW_PRESS) continue;
-            if (c.button == GLFW_MOUSE_BUTTON_RIGHT) {
+            if (!c.pressed()) continue;
+            if (c.which() == MouseButton::Right) {
                 selection = {};
-            } else if (c.button == GLFW_MOUSE_BUTTON_LEFT && can_act) {
+            } else if (c.which() == MouseButton::Left && can_act) {
                 left_click(match, gate, now);
-            } else if (c.button == GLFW_MOUSE_BUTTON_LEFT && !match.over() && match.active == 1) {
+            } else if (c.which() == MouseButton::Left && !match.over() && match.active == 1) {
                 say("Сейчас ход противника");
             }
         }
@@ -1560,8 +1563,8 @@ private:
             bot.aimed = true;
             return;
         }
-        window.inject_mouse_button(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS); // кадр 2: клик
-        window.inject_mouse_button(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE);
+        window.inject_mouse_button(MouseButton::Left, InputSystem::Transition::Press); // кадр 2: клик
+        window.inject_mouse_button(MouseButton::Left, InputSystem::Transition::Release);
         bot.clicks.pop_front();
         bot.aimed = false;
         bot.wait = director.fast ? 3 : 20;
@@ -1606,7 +1609,7 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    return Core::run<CardDuelGame>({.title = "CardDuel", .width = 1600, .height = 900, .ticks_per_second = 60.0, .pause_key = GLFW_KEY_P,
+    return Core::run<CardDuelGame>({.title = "CardDuel", .width = 1600, .height = 900, .ticks_per_second = 60.0, .pause_key = InputSystem::Key::P,
                                     .camera_controls = false, .clear_rgba = 0x0E0D14FF},
                                    argc, argv);
 }

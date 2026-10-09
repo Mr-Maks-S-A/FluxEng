@@ -35,6 +35,9 @@
 #include <string_view>
 #include <vector>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 using namespace RendererSystem;
 
@@ -587,10 +590,10 @@ struct Spawner {
     void tick() {
         std::uniform_real_distribution<float> spread(-2.0f, 2.0f);
         for (const Core::MouseButtonEvent& click : mouse.events()) {
-            if (click.action != GLFW_PRESS || click.button == GLFW_MOUSE_BUTTON_MIDDLE) continue;
+            if (!click.pressed() || click.which() == MouseButton::Middle) continue;
             const glm::vec2 at = glm::vec2{click.world_x, click.world_y} / cell_size;
             if (at.x < 0.0f || at.y < 0.0f || at.x >= grid_w || at.y >= grid_h) continue;
-            const bool rabbits = click.button == GLFW_MOUSE_BUTTON_LEFT;
+            const bool rabbits = click.which() == MouseButton::Left;
             for (int i = 0; i < (rabbits ? 10 : 3); ++i) {
                 const glm::vec2 p = glm::clamp(at + glm::vec2{spread(rng), spread(rng)}, glm::vec2(0.0f),
                                                glm::vec2(grid_w, grid_h) - 0.01f);

@@ -1,9 +1,13 @@
-# WindowSystem — окно и ввод FluxEng {#mainpage}
+# WindowSystem — окно и платформа FluxEng {#mainpage}
 
-WindowSystem открывает окно с OpenGL-контекстом и отдаёт движку ввод: опросом за кадр
-(InputState) и подписками на события (Listeners). Всё остальное в движке, включая Core,
-больше не вызывает GLFW напрямую для ввода, заголовка, времени и размеров.
-Подключение: `#include <WindowSystem/Window.hpp>`, CMake-цель `engine::WindowSystem`.
+WindowSystem открывает окно, ведёт кадр и превращает события платформы в **собственные события ввода движка**
+(InputSystem). В заголовках модуля нет ни GLFW, ни glad: платформа — деталь бэкенда за интерфейсом `IWindowBackend`.
+Подключение: `#include <WindowSystem/Window.hpp>`, CMake-цель `engine::WindowSystem` (тянет `engine::InputSystem`).
+
+```
+ ОС ─► IWindowBackend (GLFW | Headless | ваш) ─► InputEvent ─► Window ─► InputState (опрос за кадр)
+                                                                      └► WindowEvents (подписки)
+```
 
 ## Создание
 
@@ -16,81 +20,87 @@ if (!created) {
 WindowSystem::Window& window = *created;
 ```
 
-Раньше конструктор мог вернуть «наполовину созданное» окно, а счётчик окон расходился,
-если glad не загрузился. Теперь create() либо возвращает готовое окно, либо ошибку,
-и при любой ошибке всё уже освобождено.
+`create()` либо возвращает готовое окно, либо ошибку; при любой ошибке всё уже освобождено.
+
+## Платформы
+
+| `WindowConfig::backend` | Что это | Когда нужно |
+|---|---|---|
+| `WindowBackend::Glfw` (по умолчанию) | окно ОС: Windows, Linux (X11, Wayland), macOS; контекст OpenGL или окно для Vulkan; геймпады | игра |
+| `WindowBackend::Headless` | окно без экрана: размеры из конфигурации, события только внедрённые, графики нет | CI без дисплея, выделенный сервер, автотесты ввода |
+
+Своя платформа (SDL, Android, консоль, веб) — ещё одна реализация `IWindowBackend` (`WindowSystem/Backend.hpp`): она переводит
+события ОС в `InputSystem::InputEvent`, остальной код не меняется. Коды клавиш GLFW переводятся **в одном месте**
+(`GlfwKeyMap.hpp`), и тест проверяет перевод для всех кодов GLFW (отображение полное и взаимно однозначное).
 
 ## Кадр
 
 ```cpp
+using InputSystem::Key;
 while (!window.should_close()) {
-    window.poll_events();                               // 1. новый кадр ввода + события ОС
-    const WindowSystem::InputState& in = window.input();
-    if (in.pressed(GLFW_KEY_SPACE)) jump();             // 2. опрос
-    if (in.down(GLFW_KEY_D)) move_right();
+    window.poll_events();                               // 1. новый кадр ввода + события платформы
+    const InputSystem::InputState& in = window.input();
+    if (in.pressed(Key::Space)) jump();                 // 2. опрос
+    if (in.down(Key::D)) move_right();
     const WindowSystem::Size fb = window.framebuffer_size();
     render(fb.width, fb.height);                        // 3. отрисовка
     window.swap_buffers();                              // 4. показ
 }
 ```
 
-## Ввод опросом: InputState
+Опрос, действия (`ActionMap`), команда ввода за тик и запись ввода описаны в документации **InputSystem**: окно лишь доставляет события.
 
-| Вопрос | Метод | Когда `true` |
-|---|---|---|
-| зажата? | `down(key)` | с нажатия до отпускания |
-| нажали в этом кадре? | `pressed(key)` | один кадр; нажатие и отпускание внутри кадра тоже ловится |
-| отпустили в этом кадре? | `released(key)` | один кадр |
-| мышь | `mouse_down / mouse_pressed / mouse_released` | так же |
-| курсор | `cursor()`, `cursor_delta()`, Window::cursor_in_framebuffer() | пиксели окна / framebuffer'а (HiDPI) |
-| колесо | `scroll()` | сумма за кадр |
-| текст | `text()` | Unicode-символы за кадр |
-
-InputState не зависит от GLFW: его можно заполнять из записи и тестировать без окна
-(@ref 02_input_replay.cpp). При потере фокуса всё «отпускается», поэтому клавиши не залипают.
-
-**ZII.** `InputState{}` — ничего не нажато; пустое `Window{}` — все запросы безопасны.
-
-## Ввод подписками: WindowEvents
+## События подписками: WindowEvents
 
 ```cpp
-auto id = window.events().key.subscribe([&](int key, int action) { ... });
-window.events().scroll.subscribe([](double dx, double dy) { ... });
+auto id = window.events().key.subscribe([&](InputSystem::Key key, InputSystem::Transition t) { ... });
+window.events().input.subscribe([&](const InputSystem::InputEvent& e) { log.record(frame, e); });   // любое событие, в том числе геймпад
 window.events().key.unsubscribe(id);
 ```
 
-На каждое событие — сколько угодно подписчиков (раньше был один `std::function onKeyPress`,
-и его занимал Core). Отписаться можно изнутри обработчика.
+Порядок: сначала обновляется `input()`, затем typed-подписчики, затем общая подписка `input`. Подписчиков — сколько угодно;
+отписаться можно изнутри обработчика. События: `key`, `mouse_button`, `cursor`, `scroll`, `character`, `framebuffer_resized`, `focus`, `input`.
 
-События: `key`, `mouse_button`, `cursor`, `scroll`, `character`, `framebuffer_resized`, `focus`.
+## Внедрение ввода
 
-## Что ещё изменилось
+`inject(event)` и `inject_key / inject_mouse_button / inject_cursor / inject_scroll / inject_char` посылают событие **тем же путём**,
+что и ОС (состояние, затем подписчики). Так работают боты (Sandbox/CardDuel кликает мышью), автотесты и воспроизведение записи.
+Вместе с Headless-окном это даёт тесты игровой логики без дисплея, без GPU и без GLFW.
 
-| Было | Стало |
-|---|---|
-| Esc всегда закрывал окно | решает игра; для примеров есть `WindowConfig::close_on_escape` |
-| `update()` = swap + poll в конце кадра | `poll_events()` в начале и `swap_buffers()` в конце |
-| окно само вызывало `glViewport` при resize | окно не рисует; подпишитесь на `framebuffer_resized` |
-| нет мыши, колеса, заголовка, времени, vsync | `input()`, `set_title()`, `time()`, `set_vsync()`, `content_scale()` |
-| глобальный класс `Window` | `WindowSystem::Window` |
-| перемещённое окно ломало указатель GLFW | состояние в куче, адрес стабилен |
+## Геймпады
+
+Бэкенд GLFW опрашивает геймпады после `glfwPollEvents` и отдаёт только изменения: подключение, кнопки (раскладка «как у Xbox»),
+оси (стики −1…+1, курки 0…1). Игрок — номер 0…3. Без железа ту же цепочку проверяют внедрённые `GamepadInput`.
+
+## Графический API
+
+`ClientApi::OpenGL` — контекст OpenGL, функции загружены внутри окна; **заголовок glad подключайте сами** там, где вызываете GL.
+`ClientApi::None` — окно без контекста для Vulkan: `create_vulkan_surface(instance)` и `Window::vulkan_instance_extensions()`.
+`native_handle()` возвращает `void*` (у GLFW — `GLFWwindow*`); он нужен только коду, который сам говорит с платформой.
+
+## ZII и перемещение
+
+Пустое `Window{}` — все запросы безопасны (размеры 0, `should_close() == true`). Перемещённое окно продолжает работать:
+состояние лежит в куче, обработчики платформы видят актуальный объект.
 
 ## Тесты без дисплея
 
-Тесты InputState и Listeners не требуют окна. Тесты Window создают скрытое окно,
-а если дисплея нет — пропускаются с сообщением. Для CI на Linux: `xvfb-run ctest`.
-Методы `inject_*` отправляют событие тем же путём, что и ОС, — ими же можно
-воспроизводить записанный ввод.
+Headless-окно, Listeners и перевод кодов GLFW не требуют дисплея. Тесты окна GLFW создают скрытое окно, а без дисплея
+пропускаются с сообщением (для CI на Linux: `xvfb-run ctest`).
 
-## Замеры
+## Что изменилось по сравнению с прежней версией
 
-| Замер | Время |
+| Было | Стало |
 |---|---|
-| begin_frame + 8 событий клавиш | ~20 нс |
-| `down(key)` | ~1 нс |
-| рассылка события 8 подписчикам | ~20 нс |
+| `Window.hpp` включал glad и GLFW; игры писали `GLFW_KEY_W` | заголовки без платформы; `InputSystem::Key::W` |
+| события `(int key, int action)` с кодами GLFW | `(Key, Transition)`: собственные стабильные коды |
+| `WindowSystem::InputState`, `action_press` | `InputSystem::InputState`, `Transition::Press` |
+| `native_handle()` возвращал `GLFWwindow*` | `void*` |
+| платформа одна (GLFW), дисплей обязателен | бэкенды GLFW и Headless, шов для новых |
+| геймпадов нет | подключение, кнопки, оси |
+| `Window::time()` через `glfwGetTime` | монотонные часы, не зависят от платформы |
 
 ## Примеры
 
-- @ref 01_window_input.cpp — окно, опрос и подписки
-- @ref 02_input_replay.cpp — InputState без окна, воспроизведение записи
+- @ref 01_window_input.cpp — окно GLFW, опрос и подписки
+- @ref 02_input_replay.cpp — Headless-окно, запись и воспроизведение ввода

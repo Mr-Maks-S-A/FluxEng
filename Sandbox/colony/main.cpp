@@ -38,6 +38,9 @@
 #include <string_view>
 #include <vector>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 using namespace RendererSystem;
 
@@ -274,14 +277,14 @@ struct Orders {
 
     void tick() {
         for (const Core::KeyEvent& key : keys.events()) {
-            if (key.action == GLFW_PRESS && key.key == GLFW_KEY_J) show_jobs = !show_jobs;
+            if (key.pressed() && key.code() == Key::J) show_jobs = !show_jobs;
         }
         for (const Core::MouseButtonEvent& click : mouse.events()) {
-            if (click.action != GLFW_PRESS || click.button == GLFW_MOUSE_BUTTON_MIDDLE) continue;
+            if (!click.pressed() || click.which() == MouseButton::Middle) continue;
             out.emit(PlaceOrderEvent{
                 .tile_x = static_cast<std::int32_t>(std::floor(click.world_x / tile)),
                 .tile_y = static_cast<std::int32_t>(std::floor(click.world_y / tile)),
-                .kind = static_cast<std::uint32_t>(click.button == GLFW_MOUSE_BUTTON_LEFT ? ResourceKind::Tree : ResourceKind::Rock),
+                .kind = static_cast<std::uint32_t>(click.which() == MouseButton::Left ? ResourceKind::Tree : ResourceKind::Rock),
             });
         }
     }
