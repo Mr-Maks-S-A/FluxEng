@@ -29,6 +29,7 @@ struct GltfBoxOptions {
     float scale[3] = {1, 1, 1};
     std::uint16_t bad_index = 0;   ///< ≠0 — подменить последний индекс (проверка защиты от индекса вне диапазона).
     std::string texture_uri = "textures/albedo.png";
+    std::string buffer_uri = "cube.bin"; ///< Имя внешнего буфера (при embedded = false).
 };
 
 struct GltfBox {
@@ -80,7 +81,7 @@ inline GltfBox make_gltf_box(const GltfBoxOptions& o = {}) {
     const std::size_t index_at = bin.size();
     append(indices.data(), indices.size() * 2);
 
-    std::string buffer_uri = o.embedded ? "data:application/octet-stream;base64," + AssetSystem::base64_encode(bin) : "cube.bin";
+    std::string buffer_uri = o.embedded ? "data:application/octet-stream;base64," + AssetSystem::base64_encode(bin) : o.buffer_uri;
     std::string attributes = R"("POSITION":0)";
     if (o.with_normals) attributes += R"(,"NORMAL":1)";
     attributes += R"(,"TEXCOORD_0":2)";
@@ -109,8 +110,12 @@ inline GltfBox make_gltf_box(const GltfBoxOptions& o = {}) {
 
 /// Контейнер GLB: JSON-чанк + BIN-чанк (буфер 0 без uri).
 inline Bytes make_glb(std::string json, const Bytes& bin) {
-    const std::string needle = R"("uri":"cube.bin",)";
-    if (const auto at = json.find(needle); at != std::string::npos) json.erase(at, needle.size());
+    // В GLB буфер 0 лежит в BIN-чанке и не имеет uri: убираем "uri":"…", из первого буфера.
+    const std::string key = R"("buffers":[{"uri":")";
+    if (const auto at = json.find(key); at != std::string::npos) {
+        const auto value_end = json.find("\",", at + key.size());
+        if (value_end != std::string::npos) json.erase(at + std::string(R"("buffers":[{)").size(), value_end + 2 - (at + std::string(R"("buffers":[{)").size()));
+    }
     while (json.size() % 4 != 0) json += ' ';
     Bytes padded = bin;
     while (padded.size() % 4 != 0) padded.push_back(std::byte{0});

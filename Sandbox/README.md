@@ -15,6 +15,8 @@ RendererSystem, WindowSystem. Цель — увидеть API модулей в 
 | `Siege` | оборона замка: волны врагов, башни, лабиринт, экономика | **все модули сразу**: ECS + события SoA + память тика + JobSystem (5 параллельных систем, события кусков через дорожки шины `writer.lanes()` — без мьютексов, SoA); одинаковый результат при любом `--threads` |
 | `RuneCell` | заклинание как живая клетка: руны-атомы с валентностью, мембрана, обмен маны, деление, голем | химия + биология → магия: молекулы и кольца из рун (ECS, связи — ссылки с поколением), мягкая мембрана и тысячи частиц маны на JobSystem, частицы в `Pool`; только Renderer2D |
 | `CardDuel` | 3D-карточная дуэль в духе Hearthstone: вы против ИИ | **все модули и сторонние библиотеки**: Renderer3D (стол, карты, свет снарядов, прозрачный щит), лица карт — Renderer2D с текстом (stb_truetype) в Framebuffer, рисунки — шум stb_perlin; выбор карты лучом Camera3D; правила (Rules) → журнал `duel.outcome` → сцена ECS с паузами показа; ИИ — сотни случайных продолжений хода на JobSystem в аренах потоков; хроника — spdlog |
+| `AssetLab` | путь ассета до экрана: glTF + PNG + JSON → cook → пак → VFS → менеджер → GPU | **AssetSystem + RuntimeSystem в клиенте**: `AssetsModule` — модуль движка (`Game::configure` → `add_module`), cooker собирает пак (`.fmesh` вместо glTF), фоновая загрузка на JobSystem, заливка в GPU из `pump()` в главном потоке; отсутствующий файл — состояние Failed, не исключение; R — перезагрузка (`evict`); `--raw` — без cook, для сравнения таймингов |
+| `NetSim` | несколько узлов «смотрят» на одну магическую симуляцию через плохую сеть | **NetSystem + RuntimeSystem без окна**: lockstep (звезда с сервером-ретранслятором или mesh p2p), `SimulatedNetwork` с задержкой, джиттером, потерями и дубликатами; симуляция только на целых числах (ECS + JobSystem); хеш состояния сверяется на **каждом** тике между узлами с разным числом потоков, дрейфом часов; внедрённая ошибка должна быть поймана |
 
 Все игры устроены одинаково: **модули-структуры** (свои порты, данные, `declare()` и `tick()`),
 общий `ECS::World` в классе игры и **один владелец структуры мира** — создавать и уничтожать
@@ -39,11 +41,17 @@ build/bin/Siege --wave 18 --cap 100000 --ticks 900 --no-draw              # то
 build/bin/CardDuel                                       # вы против ИИ
 build/bin/Voxel --backend vulkan                         # любая игра — на Vulkan
 build/bin/RuneCell                                       # магия-клетка; --autoplay — лаборант играет сам
+build/bin/AssetLab                                       # ассеты: cook → пак → менеджер → GPU; R — перезагрузить
+build/bin/AssetLab --raw                                 # то же без cook: glTF разбирается при загрузке (сравните тайминги)
+build/bin/NetSim --ascii                                 # 4 узла, звезда: одно состояние на каждом тике, потоки 0,1,3,7
+build/bin/NetSim --mode mesh --players 6 --loss 0.25 --jitter-ms 60 --drift   # p2p в плохой сети, часы с дрейфом
+build/bin/NetSim --corrupt-peer 2 --corrupt-tick 100 --expect-desync           # проверка: рассинхронизация ловится
 build/bin/CardDuel --autoplay --fast --ticks 2400        # ИИ против ИИ без пауз показа: итог и контрольная сумма
 build/bin/CardDuel --input-bot --fast --ticks 1800       # бот кликает мышью (Window::inject_*) — проверка ввода
 build/bin/Colony --frames 600 --screenshot colony.png   # 600 кадров, скриншот, выход
 build/bin/Colony --ticks 375                             # ровно 375 тиков: детерминированный прогон
 ctest --test-dir build -L sandbox                        # smoke-тесты всех игр
+ctest --test-dir build -L netsim                         # NetSim: lockstep, без окна и дисплея
 ctest --test-dir build -L integration                    # общие тесты стыков модулей (Tests/integration)
 ```
 
