@@ -21,18 +21,16 @@ int main(int argc, char** argv) { return Core::run<MyGame>({.title = "MyGame", .
 Аргументы командной строки (`--frames`, `--ticks`, `--threads`, `--screenshot`, `--backend gl|vulkan`) разбирает `parse_args`;
 `--ticks N` включает lockstep — ровно один тик на кадр, прогон детерминирован.
 
-## Ввод через действия (`Core/Actions.hpp`)
+## Ввод через действия (`InputSystem/ActionMap.hpp`)
 
-Игра объявляет **действия** по смыслу и привязывает клавиши и кнопки мыши; дальше спрашивает про действия, а не про клавиши:
-перепривязка файлом игрока, несколько клавиш на действие, оси из двух действий, проверка конфликтов, `serialize()` — готовый файл настроек.
+Действия живут в модуле `InputSystem` (раньше был `Core::ActionMap`): игра привязывает клавиши и кнопки к именам действий и
+спрашивает про действия; перепривязка файлом игрока — `to_text()` / `from_text()`.
 
 ```cpp
-Core::ActionMap actions;
-auto jump = actions.declare("jump", "Прыжок");
-actions.bind(jump, Core::Binding::key(GLFW_KEY_SPACE));
-actions.apply("jump = F, MOUSE_RIGHT\n");                      // файл игрока; ошибка — ничего не применяется
-if (actions.pressed(app.window().input(), jump)) start_jump();
+InputSystem::ActionMap actions;
+actions.bind("jump", InputSystem::Key::Space);
+if (actions.pressed("jump", app.window().input())) start_jump();
 ```
 
-Примеры: `01_actions.cpp` (без окна), `02_minimal_game.cpp` (скрытое окно, 120 тиков, события, программное нажатие клавиши).
-Тесты: `CoreTests` (FixedStep, аргументы, действия); интеграционные — в `Tests/integration`.
+Пример: `02_minimal_game.cpp` (скрытое окно, 120 тиков, события, программное нажатие клавиши).
+Тесты: `CoreTests` (FixedStep, аргументы); интеграционные — в `Tests/integration`.

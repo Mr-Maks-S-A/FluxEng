@@ -42,6 +42,9 @@
 #include <string>
 #include <string_view>
 
+using InputSystem::Key;
+using InputSystem::MouseButton;
+
 namespace es = EventSystem;
 namespace ms = MemorySystem;
 using namespace RendererSystem;
@@ -376,10 +379,10 @@ struct Population {
 
     void tick(ECS::World& world) {
         for (const Core::KeyEvent& key : keys.events()) {
-            if (key.action != GLFW_PRESS) continue;
-            if (key.key == GLFW_KEY_T) parallel = !parallel;
-            if (key.key == GLFW_KEY_LEFT_BRACKET) target = std::max(target / 2, min_agents);
-            if (key.key == GLFW_KEY_RIGHT_BRACKET) target = std::min(target * 2, max_agents);
+            if (!key.pressed()) continue;
+            if (key.code() == Key::T) parallel = !parallel;
+            if (key.code() == Key::LeftBracket) target = std::max(target / 2, min_agents);
+            if (key.code() == Key::RightBracket) target = std::min(target * 2, max_agents);
         }
 
         // Сбитые: SoA-колонки события, сущность восстанавливается из двух полей.

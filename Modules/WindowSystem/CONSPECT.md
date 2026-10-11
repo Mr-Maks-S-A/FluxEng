@@ -69,7 +69,7 @@ window.events().key.unsubscribe(id);
 ```
 В тестах без окна: `InputState s; s.on_key(GLFW_KEY_W, action_press); s.pressed(GLFW_KEY_W)`.
 
-Где это в проекте: `Core::App` (окно, ввод, подписки на `key`/`mouse_button`); `Core::ActionMap` читает `InputState`; `RendererSystem` через `native_handle()` и `create_vulkan_surface` подключается к окну.
+Где это в проекте: `Core::App` (окно, ввод, подписки на `key`/`mouse_button`); `InputSystem::ActionMap` читает `InputState`; `RendererSystem` через `native_handle()` и `create_vulkan_surface` подключается к окну.
 
 ## 5. Что менять осторожно
 
@@ -83,7 +83,7 @@ window.events().key.unsubscribe(id);
 ## 6. Упражнения для переписывания
 
 1. Замени GLFW на SDL3, оставив публичный API: что придётся заменить в `Impl` и колбэках, а что останется нетронутым (`InputState`, `Listeners`)?
-2. Добавь геймпад в `InputState` (кнопки, оси с мёртвой зоной) и привязку в `Core::ActionMap`.
+2. Добавь геймпад в `InputState` (кнопки, оси с мёртвой зоной) и привязку в `InputSystem::ActionMap`.
 3. Реализуй запись ввода в файл и воспроизведение: `InputState` не зависит от окна — какие события записывать, чтобы воспроизведение было побитово точным?
 4. Добавь `Listeners::subscribe_once` и тест на подписку/отписку изнутри обработчика.
 5. Сделай `inject_*` честными: пусть они добавляются в очередь и применяются на `poll_events()` (после `begin_frame`) — что сломается в `Core::App`?

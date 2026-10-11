@@ -50,21 +50,21 @@ public:
         record("frame");
         if (++frames == 3) {
             // Между кадрами, как будто ОС прислала: клавиша и щелчок (нажать + отпустить в одном кадре).
-            app.window().inject_key(GLFW_KEY_K, GLFW_PRESS);
-            app.window().inject_key(GLFW_KEY_K, GLFW_RELEASE);
-            app.window().inject_mouse_button(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS);
-            app.window().inject_mouse_button(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE);
+            app.window().inject_key(InputSystem::Key::K, InputSystem::Transition::Press);
+            app.window().inject_key(InputSystem::Key::K, InputSystem::Transition::Release);
+            app.window().inject_mouse_button(InputSystem::MouseButton::Left, InputSystem::Transition::Press);
+            app.window().inject_mouse_button(InputSystem::MouseButton::Left, InputSystem::Transition::Release);
         }
     }
 
     void tick(Core::App& app) override {
         record("tick");
         for (const Core::KeyEvent& k : keys.events()) {
-            if (k.key == GLFW_KEY_K && k.action == GLFW_PRESS) ++key_presses;
+            if (k.code() == InputSystem::Key::K && k.pressed()) ++key_presses;
         }
         for (const Core::MouseButtonEvent& c : clicks.events()) {
-            if (c.button != GLFW_MOUSE_BUTTON_LEFT) continue;
-            (c.action == GLFW_PRESS ? clicks_pressed : clicks_released) += 1;
+            if (c.which() != InputSystem::MouseButton::Left) continue;
+            (c.pressed() ? clicks_pressed : clicks_released) += 1;
         }
         // Память тика: значение прошлого тика всё ещё на месте, новое — в текущей арене.
         if (previous != nullptr) {

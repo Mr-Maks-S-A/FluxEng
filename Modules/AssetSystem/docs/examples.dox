@@ -1,0 +1,19 @@
+/**
+ * @file examples.dox
+ * @brief Список примеров модуля (сами файлы — в examples/, собираются и запускаются как smoke-тесты).
+ */
+
+/**
+ * @example 01_cook_and_load.cpp
+ * Путь ассета: glTF на диске → cook → пак → VFS → менеджер.
+ */
+
+/**
+ * @example 02_async_loading.cpp
+ * Фоновая загрузка на JobSystem и обратные вызовы в главном потоке (pump).
+ */
+
+/**
+ * @example 03_mods_and_untrusted_data.cpp
+ * Моды и данные от сервера: перекрытие файлов, лимиты, враждебные файлы.
+ */

@@ -21,14 +21,18 @@ else()
 endif()
 
 # ==============================================================================
-# Библиотека: окно, OpenGL-контекст, ввод и события поверх GLFW + glad.
-# InputState и Listeners не зависят от GLFW и тестируются без дисплея.
+# Библиотека: окно, события и ввод; платформа — за интерфейсом IWindowBackend (GLFW, Headless).
+# Публичные заголовки не содержат ни GLFW, ни glad: они — деталь бэкенда GLFW. Коды ввода — InputSystem.
+# Headless-окно, Listeners и перевод кодов тестируются без дисплея.
 # ==============================================================================
+flux_module(InputSystem)
 flux_external(glfw)
 flux_external(glad)
 
 add_library(WindowSystem STATIC
     src/code/Window.cpp
+    src/code/GlfwBackend.cpp
+    src/code/HeadlessBackend.cpp
 )
 add_library(engine::WindowSystem ALIAS WindowSystem)
 
@@ -38,8 +42,8 @@ target_include_directories(WindowSystem PUBLIC
 )
 target_compile_features(WindowSystem PUBLIC cxx_std_23)
 target_link_libraries(WindowSystem
-    PUBLIC  glad glfw
-    PRIVATE $<BUILD_INTERFACE:WindowSystemOptions>
+    PUBLIC  engine::InputSystem
+    PRIVATE glad glfw $<BUILD_INTERFACE:WindowSystemOptions>
 )
 
 # Vulkan (необязательно): только заголовки — glfwCreateWindowSurface сама находит загрузчик Vulkan.

@@ -76,26 +76,25 @@ Color mix(Color a, Color b, float t) {
 }
 
 struct Actions {
-    Core::ActionMap map;
-    Core::ActionId forward, back, left, right, jump, cast_personal, cast_ambient, toggle_editor;
-    std::array<Core::ActionId, Character::Grimoire::slot_count> slot;
+    InputSystem::ActionMap map;
+    std::string forward, back, left, right, jump, cast_personal, cast_ambient, toggle_editor;
+    std::array<std::string, Character::Grimoire::slot_count> slot;
 
     Actions() {
-        using Core::Binding;
-        forward = map.declare("move_up", "Вверх по карте");
-        back = map.declare("move_down", "Вниз по карте");
-        left = map.declare("move_left", "Влево");
-        right = map.declare("move_right", "Вправо");
-        jump = map.declare("jump", "Прыжок");
-        cast_personal = map.declare("cast_personal", "Каст из личного запаса маны");
-        cast_ambient = map.declare("cast_ambient", "Каст из окружающей маны");
-        toggle_editor = map.declare("toggle_editor", "Редактор рун");
-        for (std::size_t i = 0; i < slot.size(); ++i) slot[i] = map.declare("slot_" + std::to_string(i + 1), "Слот гримуара " + std::to_string(i + 1));
-        map.bind(forward, Binding::key(GLFW_KEY_W)).bind(back, Binding::key(GLFW_KEY_S)).bind(left, Binding::key(GLFW_KEY_A)).bind(right, Binding::key(GLFW_KEY_D));
-        map.bind(jump, Binding::key(GLFW_KEY_SPACE));
-        map.bind(cast_personal, Binding::mouse(GLFW_MOUSE_BUTTON_LEFT)).bind(cast_ambient, Binding::mouse(GLFW_MOUSE_BUTTON_RIGHT));
-        map.bind(toggle_editor, Binding::key(GLFW_KEY_TAB));
-        for (std::size_t i = 0; i < slot.size(); ++i) map.bind(slot[i], Binding::key(GLFW_KEY_1 + static_cast<int>(i)));
+        forward = "move_up";
+        back = "move_down";
+        left = "move_left";
+        right = "move_right";
+        jump = "jump";
+        cast_personal = "cast_personal";
+        cast_ambient = "cast_ambient";
+        toggle_editor = "toggle_editor";
+        for (std::size_t i = 0; i < slot.size(); ++i) slot[i] = "slot_" + std::to_string(i + 1);
+        map.bind(forward, InputSystem::Key::W).bind(back, InputSystem::Key::S).bind(left, InputSystem::Key::A).bind(right, InputSystem::Key::D);
+        map.bind(jump, InputSystem::Key::Space);
+        map.bind(cast_personal, InputSystem::MouseButton::Left).bind(cast_ambient, InputSystem::MouseButton::Right);
+        map.bind(toggle_editor, InputSystem::Key::Tab);
+        for (std::size_t i = 0; i < slot.size(); ++i) map.bind(slot[i], InputSystem::key_from_digit(static_cast<int>(i) + 1));
     }
 };
 
@@ -183,14 +182,14 @@ public:
     void frame(Core::App& app, float seconds) override {
         ++frames;
         const auto& in = app.window().input();
-        const Core::ActionMap& act = actions.map;
+        const InputSystem::ActionMap& act = actions.map;
         const glm::vec2 vp = app.camera().viewport;
         const WindowSystem::Vec2d cur = app.window().cursor_in_framebuffer();
         cursor = {static_cast<float>(cur.x), static_cast<float>(cur.y)};
 
-        if (act.pressed(in, actions.toggle_editor)) editor_open = !editor_open;
+        if (act.pressed(actions.toggle_editor, in)) editor_open = !editor_open;
         for (int i = 0; i < Character::Grimoire::slot_count; ++i) {
-            if (act.pressed(in, actions.slot[static_cast<std::size_t>(i)])) slot = i;
+            if (act.pressed(actions.slot[static_cast<std::size_t>(i)], in)) slot = i;
         }
         for (auto it = glow.begin(); it != glow.end();) { // свечение исполнения затухает за ~1 с
             it->second -= seconds * 1.1f;
@@ -351,24 +350,24 @@ private:
         pending_set.push_back(SpellSim::set_program_command(edit_slot, hash));
     }
 
-    void editor_input(const WindowSystem::InputState& in, glm::vec2 vp) {
+    void editor_input(const InputSystem::InputState& in, glm::vec2 vp) {
         const Rect area = editor_area(vp);
         const ed::Vec2 local{cursor.x - area.position.x, cursor.y - area.position.y};
-        const bool ctrl = in.down(GLFW_KEY_LEFT_CONTROL) || in.down(GLFW_KEY_RIGHT_CONTROL), shift = in.down(GLFW_KEY_LEFT_SHIFT) || in.down(GLFW_KEY_RIGHT_SHIFT);
+        const bool ctrl = in.down(InputSystem::Key::LeftCtrl) || in.down(InputSystem::Key::RightCtrl), shift = in.down(InputSystem::Key::LeftShift) || in.down(InputSystem::Key::RightShift);
         if (std::exchange(needs_frame, false)) controller.camera.frame(ed::bounds_of(editor.graph()), {area.size.x, area.size.y - palette_height - 30.0f});
         const bool inside = local.x >= 0 && local.y >= 0 && local.x <= area.size.x && local.y <= area.size.y;
         const bool in_palette = inside && local.y < palette_height;
 
-        if (in.mouse_pressed(GLFW_MOUSE_BUTTON_LEFT) && in_palette && !locked) {
+        if (in.mouse_pressed(InputSystem::MouseButton::Left) && in_palette && !locked) {
             const int i = static_cast<int>(local.x / (area.size.x / static_cast<float>(palette.size())));
             if (i >= 0 && i < static_cast<int>(palette.size())) place_from_palette(palette[static_cast<std::size_t>(i)], area);
-        } else if (in.mouse_pressed(GLFW_MOUSE_BUTTON_LEFT) && inside && (!locked)) {
+        } else if (in.mouse_pressed(InputSystem::MouseButton::Left) && inside && (!locked)) {
             controller.press(ed::Button::Left, local, shift);
         }
-        if (in.mouse_pressed(GLFW_MOUSE_BUTTON_RIGHT) && inside) controller.press(ed::Button::Right, local);
+        if (in.mouse_pressed(InputSystem::MouseButton::Right) && inside) controller.press(ed::Button::Right, local);
         controller.move(local);
-        if (in.mouse_released(GLFW_MOUSE_BUTTON_LEFT)) controller.release(ed::Button::Left, local);
-        if (in.mouse_released(GLFW_MOUSE_BUTTON_RIGHT)) controller.release(ed::Button::Right, local);
+        if (in.mouse_released(InputSystem::MouseButton::Left)) controller.release(ed::Button::Left, local);
+        if (in.mouse_released(InputSystem::MouseButton::Right)) controller.release(ed::Button::Right, local);
 
         if (const double scroll = in.scroll().y; scroll != 0.0 && inside) {
             const ed::Pick& hover = controller.hover();
@@ -380,15 +379,15 @@ private:
             }
         }
         if (locked) return;
-        if (ctrl && in.pressed(GLFW_KEY_Z)) shift ? editor.redo() : editor.undo();
-        if (ctrl && in.pressed(GLFW_KEY_Y)) editor.redo();
-        if (!ctrl && (in.pressed(GLFW_KEY_DELETE) || in.pressed(GLFW_KEY_X))) editor.erase_selection();
-        if (in.pressed(GLFW_KEY_C)) controller.cancel();
-        if (in.pressed(GLFW_KEY_L)) tidy();
-        if (in.pressed(GLFW_KEY_F)) controller.camera.frame(ed::bounds_of(editor.graph()), {area.size.x, area.size.y});
-        if (in.pressed(GLFW_KEY_E) && editor.selection().size() == 1) editor.set_entry(*editor.selection().begin());
-        if (in.pressed(GLFW_KEY_F5)) save_graph();
-        if (in.pressed(GLFW_KEY_ENTER)) pending_cast = Runes::ManaSource::Personal; // выстрел из редактора: смотреть, что засветится
+        if (ctrl && in.pressed(InputSystem::Key::Z)) shift ? editor.redo() : editor.undo();
+        if (ctrl && in.pressed(InputSystem::Key::Y)) editor.redo();
+        if (!ctrl && (in.pressed(InputSystem::Key::Delete) || in.pressed(InputSystem::Key::X))) editor.erase_selection();
+        if (in.pressed(InputSystem::Key::C)) controller.cancel();
+        if (in.pressed(InputSystem::Key::L)) tidy();
+        if (in.pressed(InputSystem::Key::F)) controller.camera.frame(ed::bounds_of(editor.graph()), {area.size.x, area.size.y});
+        if (in.pressed(InputSystem::Key::E) && editor.selection().size() == 1) editor.set_entry(*editor.selection().begin());
+        if (in.pressed(InputSystem::Key::F5)) save_graph();
+        if (in.pressed(InputSystem::Key::Enter)) pending_cast = Runes::ManaSource::Personal; // выстрел из редактора: смотреть, что засветится
     }
 
     void place_from_palette(Rune rune, const Rect& area) {
@@ -424,14 +423,14 @@ private:
 
     // ================================================================ мир
 
-    void world_input(const WindowSystem::InputState& in, const Core::ActionMap& act) {
-        const float up = act.axis(in, actions.forward, actions.back), side = act.axis(in, actions.right, actions.left);
+    void world_input(const InputSystem::InputState& in, const InputSystem::ActionMap& act) {
+        const float up = (act.value(actions.forward, in) - act.value(actions.back, in)), side = (act.value(actions.right, in) - act.value(actions.left, in));
         glm::vec2 w{side, -up}; // вверх по экрану — к меньшему z
         if (glm::length(w) > 1.0f) w = glm::normalize(w);
         wish = {Fixed::from_double(w.x), Fixed::from_double(w.y)};
-        if (act.pressed(in, actions.jump)) pending_jump = true;
-        if (act.pressed(in, actions.cast_personal)) pending_cast = Runes::ManaSource::Personal;
-        if (act.pressed(in, actions.cast_ambient)) pending_cast = Runes::ManaSource::Ambient;
+        if (act.pressed(actions.jump, in)) pending_jump = true;
+        if (act.pressed(actions.cast_personal, in)) pending_cast = Runes::ManaSource::Personal;
+        if (act.pressed(actions.cast_ambient, in)) pending_cast = Runes::ManaSource::Ambient;
     }
 
     [[nodiscard]] glm::dvec2 player_xz(float alpha) const {
@@ -710,6 +709,6 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    const int code = Core::run<RuneCell2>({.title = "RuneCell2", .ticks_per_second = 60.0, .pause_key = GLFW_KEY_P, .camera_controls = false, .clear_rgba = 0x0A0C16FF}, argc, argv);
+    const int code = Core::run<RuneCell2>({.title = "RuneCell2", .ticks_per_second = 60.0, .pause_key = InputSystem::Key::P, .camera_controls = false, .clear_rgba = 0x0A0C16FF}, argc, argv);
     return code != 0 ? code : (g_failed_checks != 0 ? 1 : 0);
 }

@@ -10,7 +10,6 @@
  * @endcode
  */
 
-#include <Core/Actions.hpp>
 #include <Core/App.hpp>
 #include <Core/FixedStep.hpp>
 #include <Core/PlatformEvents.hpp>

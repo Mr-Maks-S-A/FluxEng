@@ -9,7 +9,6 @@
 
 #include <Core/Core.hpp>
 
-#include <GLFW/glfw3.h>
 
 #include <cstdio>
 
@@ -37,19 +36,18 @@ public:
         const es::ModuleId id = app.bus().declare_module("Demo").produces<JumpEvent>().consumes<JumpEvent>();
         jumps_out = app.bus().writer<JumpEvent>(id);
         jumps_in = app.bus().reader<JumpEvent>(id);
-        jump = actions.declare("jump", "Прыжок");
-        actions.bind(jump, Core::Binding::key(GLFW_KEY_SPACE));
+        actions.bind("jump", InputSystem::Key::Space);
     }
 
     // 2. frame: начало кадра — ввод (в домене кадра), обзор камерой, загрузка данных на GPU. Тиков здесь ещё нет.
     void frame(Core::App& app, float /*seconds*/) override {
         ++g.frames;
         if (g.frames == 30) { // «игрок» нажимает пробел: программное нажатие через окно (событие доходит до ввода сразу)
-            app.window().inject_key(GLFW_KEY_SPACE, GLFW_PRESS);
-            app.window().inject_key(GLFW_KEY_SPACE, GLFW_RELEASE);
+            app.window().inject_key(InputSystem::Key::Space, InputSystem::Transition::Press);
+            app.window().inject_key(InputSystem::Key::Space, InputSystem::Transition::Release);
         }
         // «Нажато в этом кадре» живёт один кадр, а тиков за кадр может быть 0 или несколько — поэтому запоминаем намерение.
-        if (actions.pressed(app.window().input(), jump)) want_jump = true;
+        if (actions.pressed("jump", app.window().input())) want_jump = true;
     }
 
     // 3. tick: один шаг симуляции (фиксированная частота). Читаем события прошлого тика, пишем события этого.
@@ -69,8 +67,7 @@ public:
     void shutdown(Core::App&) override { g.shutdown = true; }
 
 private:
-    Core::ActionMap actions;
-    Core::ActionId jump;
+    InputSystem::ActionMap actions;
     es::EventWriter<JumpEvent> jumps_out;
     es::EventReader<JumpEvent> jumps_in;
     bool want_jump = false;
@@ -80,8 +77,8 @@ private:
 
 int main(int argc, char** argv) {
     // max_ticks включает «lockstep»: ровно один тик на кадр — прогон детерминирован и не зависит от скорости машины.
-    // pause_key = 0: по умолчанию пауза висит на пробеле, а пример сам «нажимает» пробел — иначе тики встали бы навсегда.
-    const int code = Core::run<Demo>({.title = "MinimalGame", .width = 320, .height = 240, .visible = false, .ticks_per_second = 60.0, .max_ticks = 120, .pause_key = 0},
+    // pause_key = Key::Unknown: по умолчанию пауза висит на пробеле, а пример сам «нажимает» пробел — иначе тики встали бы навсегда.
+    const int code = Core::run<Demo>({.title = "MinimalGame", .width = 320, .height = 240, .visible = false, .ticks_per_second = 60.0, .max_ticks = 120, .pause_key = InputSystem::Key::Unknown},
                                      argc, argv);
     std::printf("\nsetup %d, кадров %d, тиков %d, прыжков отправлено %d / получено %d, shutdown вызван: %s\n", g.setups, g.frames, g.ticks, g.jumps_sent, g.jumps_seen,
                 g.shutdown ? "да" : "нет");

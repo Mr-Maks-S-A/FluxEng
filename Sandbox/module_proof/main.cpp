@@ -349,9 +349,9 @@ private:
             return analysis.ok() && undo && redo && analysis.cost.effects == 1;
         });
         add("WindowSystem", [](Core::App& app, std::string& d) {
-            app.window().inject_key(GLFW_KEY_F9, GLFW_PRESS); // ввод без железа: путь окно → состояние ввода
-            const bool delivered = app.window().input().down(GLFW_KEY_F9);
-            app.window().inject_key(GLFW_KEY_F9, GLFW_RELEASE);
+            app.window().inject_key(InputSystem::Key::F9, InputSystem::Transition::Press); // ввод без железа: путь окно → состояние ввода
+            const bool delivered = app.window().input().down(InputSystem::Key::F9);
+            app.window().inject_key(InputSystem::Key::F9, InputSystem::Transition::Release);
             d = std::format("окно {}×{}, поддельное нажатие клавиши {}", app.config().width, app.config().height, delivered ? "дошло" : "потеряно");
             return delivered;
         });

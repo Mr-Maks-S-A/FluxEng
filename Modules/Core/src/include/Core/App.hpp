@@ -39,7 +39,8 @@
 #include <MemorySystem/MemorySystem.hpp>
 #include <RendererSystem/RendererSystem.hpp>
 #include <RuntimeSystem/RuntimeSystem.hpp>
-#include <WindowSystem/Window.hpp> // окно, ввод; подключает glad + GLFW
+#include <InputSystem/InputSystem.hpp>  // собственные коды ввода, состояние, действия
+#include <WindowSystem/Window.hpp>       // окно и события; платформенных заголовков в нём нет
 
 #include <array>
 #include <concepts>
@@ -64,7 +65,7 @@ struct AppConfig {
     int max_ticks = -1;                    ///< Выйти через N тиков; включает lockstep: один тик на кадр,
                                            ///< поэтому прогон детерминирован и не зависит от скорости машины.
     std::string screenshot{};              ///< Сохранить последний кадр в PNG (пусто — не сохранять).
-    int pause_key = GLFW_KEY_SPACE;        ///< Клавиша паузы (3D-игре Space нужен для прыжка); 0 — без паузы.
+    InputSystem::Key pause_key = InputSystem::Key::Space; ///< Клавиша паузы (3D-игре Space нужен для прыжка); Key::Unknown — без паузы.
     int threads = -1;                      ///< Фоновых потоков JobSystem; -1 — по умолчанию (ядра − 1),
                                            ///< 0 — всё в главном потоке (эталон для сравнения и отладки).
     bool camera_controls = true;           ///< WASD/стрелки и колесо двигают 2D-камеру (3D-игре обычно не нужно).
@@ -148,9 +149,10 @@ public:
  * - WASD / стрелки — сдвиг камеры, колесо — зум к курсору;
  * - F1 — напечатать граф событий и статистику каналов; Esc — выход.
  *
- * Ввод берётся из WindowSystem: клавиши и кнопки мыши приходят подпиской на `events().key` /
- * `events().mouse_button` (и уходят в шину как `platform.key` / `platform.mouse_button`, по порядку,
- * включая внедрённые Window::inject_*), курсор и колесо — из `input()` за кадр.
+ * Ввод берётся из WindowSystem в собственных кодах движка (InputSystem::Key, MouseButton): клавиши и кнопки мыши
+ * приходят подпиской на `events().key` / `events().mouse_button` (и уходят в шину как `platform.key` /
+ * `platform.mouse_button`, по порядку, включая внедрённые Window::inject_*), курсор и колесо — из `input()` за кадр.
+ * GLFW и его коды в Core не используются.
  */
 class App {
 public:
@@ -232,7 +234,7 @@ public:
     void print_event_report() const;
 
 private:
-    void on_key(int key, int action);
+    void on_key(InputSystem::Key key, InputSystem::Transition transition);
     void poll_input(float frame_seconds);
     void draw_bus_overlay();
     void update_title(Game& game, double fps);

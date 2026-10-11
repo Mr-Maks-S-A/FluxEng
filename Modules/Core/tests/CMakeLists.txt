@@ -1,6 +1,5 @@
 add_executable(CoreTests
     test_main.cpp
-    test_actions.cpp
     test_fixed_step.cpp
     test_args.cpp
 )

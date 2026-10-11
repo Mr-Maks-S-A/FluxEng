@@ -101,13 +101,14 @@ App::App(AppConfig config)
     m_key_out = m_runtime.bus().writer<KeyEvent>(m_platform);
     m_mouse_out = m_runtime.bus().writer<MouseButtonEvent>(m_platform);
 
-    m_window.events().key.subscribe([this](int key, int action) { on_key(key, action); });
+    m_window.events().key.subscribe([this](InputSystem::Key key, InputSystem::Transition transition) { on_key(key, transition); });
     // Кнопки мыши — подпиской, как и клавиши: каждое нажатие и отпускание попадает в шину по порядку,
     // включая внедрённые (Window::inject_mouse_button) между кадрами — флаги кадра InputState их бы потеряли.
-    m_window.events().mouse_button.subscribe([this](int button, int action) {
+    m_window.events().mouse_button.subscribe([this](InputSystem::MouseButton button, InputSystem::Transition transition) {
         const WindowSystem::Vec2d cursor = m_window.cursor_in_framebuffer();
         const glm::vec2 world = m_camera.screen_to_world({static_cast<float>(cursor.x), static_cast<float>(cursor.y)});
-        m_mouse_out.emit(MouseButtonEvent{.button = button, .action = action, .world_x = world.x, .world_y = world.y});
+        m_mouse_out.emit(MouseButtonEvent{.button = static_cast<std::int32_t>(button), .action = static_cast<std::int32_t>(transition),
+                                          .world_x = world.x, .world_y = world.y});
     });
 }
 
@@ -126,36 +127,38 @@ void App::load_ui_fonts() {
     m_ui_font_bold = bold ? m_renderer->add_font(std::move(*bold)) : m_ui_font;
 }
 
-void App::on_key(int key, int action) {
-    m_key_out.emit(KeyEvent{.key = key, .action = action});
-    if (action != GLFW_PRESS) {
+void App::on_key(InputSystem::Key key, InputSystem::Transition transition) {
+    using InputSystem::Key;
+    m_key_out.emit(KeyEvent{.key = static_cast<std::int32_t>(key), .action = static_cast<std::int32_t>(transition)});
+    if (transition != InputSystem::Transition::Press) {
         return;
     }
-    if (key == m_config.pause_key) {
+    if (m_config.pause_key != Key::Unknown && key == m_config.pause_key) {
         m_runtime.step().paused = !m_runtime.step().paused;
         return;
     }
     switch (key) {
-        case GLFW_KEY_EQUAL:
-        case GLFW_KEY_KP_ADD: m_runtime.step().speed = std::min(m_runtime.step().speed * 2, 8); break;
-        case GLFW_KEY_MINUS:
-        case GLFW_KEY_KP_SUBTRACT: m_runtime.step().speed = std::max(m_runtime.step().speed / 2, 1); break;
-        case GLFW_KEY_F1: print_event_report(); break;
-        case GLFW_KEY_ESCAPE: m_window.request_close(); break;
+        case Key::Equal:
+        case Key::KpAdd: m_runtime.step().speed = std::min(m_runtime.step().speed * 2, 8); break;
+        case Key::Minus:
+        case Key::KpSubtract: m_runtime.step().speed = std::max(m_runtime.step().speed / 2, 1); break;
+        case Key::F1: print_event_report(); break;
+        case Key::Escape: m_window.request_close(); break;
         default: break;
     }
 }
 
 void App::poll_input(float frame_seconds) {
-    const WindowSystem::InputState& input = m_window.input();
+    const InputSystem::InputState& input = m_window.input();
 
     // Панорама камерой — в домене кадра, работает и на паузе.
     if (m_config.camera_controls) {
         glm::vec2 pan{0.0f};
-        if (input.down(GLFW_KEY_A) || input.down(GLFW_KEY_LEFT)) pan.x -= 1;
-        if (input.down(GLFW_KEY_D) || input.down(GLFW_KEY_RIGHT)) pan.x += 1;
-        if (input.down(GLFW_KEY_W) || input.down(GLFW_KEY_UP)) pan.y -= 1;
-        if (input.down(GLFW_KEY_S) || input.down(GLFW_KEY_DOWN)) pan.y += 1;
+        using InputSystem::Key;
+        if (input.down(Key::A) || input.down(Key::Left)) pan.x -= 1;
+        if (input.down(Key::D) || input.down(Key::Right)) pan.x += 1;
+        if (input.down(Key::W) || input.down(Key::Up)) pan.y -= 1;
+        if (input.down(Key::S) || input.down(Key::Down)) pan.y += 1;
         m_camera.position += pan * (500.0f * frame_seconds / m_camera.zoom);
     }
 
@@ -171,7 +174,7 @@ void App::poll_input(float frame_seconds) {
     }
     m_input.mouse_world = m_camera.screen_to_world(m_input.mouse_screen);
 
-    constexpr int buttons[3] = {GLFW_MOUSE_BUTTON_LEFT, GLFW_MOUSE_BUTTON_RIGHT, GLFW_MOUSE_BUTTON_MIDDLE};
+    constexpr InputSystem::MouseButton buttons[3] = {InputSystem::MouseButton::Left, InputSystem::MouseButton::Right, InputSystem::MouseButton::Middle};
     for (std::size_t i = 0; i < 3; ++i) {
         m_input.down[i] = input.mouse_down(buttons[i]);
         m_input.pressed[i] = input.mouse_pressed(buttons[i]);

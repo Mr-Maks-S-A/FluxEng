@@ -60,49 +60,48 @@ FVec3 to_fvec(glm::vec3 v) { return Math::quantize_direction(v.x, v.y, v.z); }
 glm::dvec3 to_meters(Math::WorldPos p) { const auto m = p.to_doubles(); return {m[0], m[1], m[2]}; }
 Math::WorldPos to_world(const glm::dvec3& p) { return Math::WorldPos::from_doubles(p.x, p.y, p.z); }
 
-/// Действия игры и их привязки по умолчанию. Игрок переопределяет их файлом (`--bindings файл`, формат — `ActionMap::serialize`).
+/// Действия игры и их привязки по умолчанию. Игрок переопределяет их файлом (`--bindings файл`, формат — `ActionMap::to_text`).
 struct Actions {
-    Core::ActionMap map;
-    Core::ActionId forward, back, left, right, jump, cast_personal, cast_ambient, free_camera, fly_up, fly_down, fly_fast;
-    Core::ActionId toggle_capture, toggle_wireframe, toggle_chunks, toggle_slice, toggle_trace, reload_spells;
-    std::array<Core::ActionId, Character::Grimoire::slot_count> slot;
+    InputSystem::ActionMap map;
+    std::string forward, back, left, right, jump, cast_personal, cast_ambient, free_camera, fly_up, fly_down, fly_fast;
+    std::string toggle_capture, toggle_wireframe, toggle_chunks, toggle_slice, toggle_trace, reload_spells;
+    std::array<std::string, Character::Grimoire::slot_count> slot;
 
     Actions() {
-        using Core::Binding;
-        forward = map.declare("move_forward", "Вперёд");
-        back = map.declare("move_back", "Назад");
-        left = map.declare("move_left", "Влево");
-        right = map.declare("move_right", "Вправо");
-        jump = map.declare("jump", "Прыжок");
-        cast_personal = map.declare("cast_personal", "Каст из личного запаса маны");
-        cast_ambient = map.declare("cast_ambient", "Каст из окружающей маны");
-        free_camera = map.declare("camera_free", "Свободная камера");
-        fly_up = map.declare("fly_up", "Свободная камера: вверх");
-        fly_down = map.declare("fly_down", "Свободная камера: вниз");
-        fly_fast = map.declare("fly_fast", "Свободная камера: быстро");
-        toggle_capture = map.declare("toggle_mouse_capture", "Отпустить / захватить мышь");
-        toggle_wireframe = map.declare("toggle_wireframe", "Каркасный режим ландшафта");
-        toggle_chunks = map.declare("toggle_chunk_boxes", "Рамки чанков");
-        toggle_slice = map.declare("toggle_mana_slice", "Срез поля маны");
-        toggle_trace = map.declare("toggle_spell_trace", "Трасса последнего заклинания");
-        reload_spells = map.declare("reload_spells", "Перечитать файлы заклинаний");
-        for (std::size_t i = 0; i < slot.size(); ++i) slot[i] = map.declare("slot_" + std::to_string(i + 1), "Слот гримуара " + std::to_string(i + 1));
+        forward = "move_forward";
+        back = "move_back";
+        left = "move_left";
+        right = "move_right";
+        jump = "jump";
+        cast_personal = "cast_personal";
+        cast_ambient = "cast_ambient";
+        free_camera = "camera_free";
+        fly_up = "fly_up";
+        fly_down = "fly_down";
+        fly_fast = "fly_fast";
+        toggle_capture = "toggle_mouse_capture";
+        toggle_wireframe = "toggle_wireframe";
+        toggle_chunks = "toggle_chunk_boxes";
+        toggle_slice = "toggle_mana_slice";
+        toggle_trace = "toggle_spell_trace";
+        reload_spells = "reload_spells";
+        for (std::size_t i = 0; i < slot.size(); ++i) slot[i] = "slot_" + std::to_string(i + 1);
 
-        map.bind(forward, Binding::key(GLFW_KEY_W)).bind(forward, Binding::key(GLFW_KEY_UP));
-        map.bind(back, Binding::key(GLFW_KEY_S)).bind(back, Binding::key(GLFW_KEY_DOWN));
-        map.bind(left, Binding::key(GLFW_KEY_A)).bind(left, Binding::key(GLFW_KEY_LEFT));
-        map.bind(right, Binding::key(GLFW_KEY_D)).bind(right, Binding::key(GLFW_KEY_RIGHT));
-        map.bind(jump, Binding::key(GLFW_KEY_SPACE));
-        map.bind(cast_personal, Binding::mouse(GLFW_MOUSE_BUTTON_LEFT));
-        map.bind(cast_ambient, Binding::mouse(GLFW_MOUSE_BUTTON_RIGHT));
-        map.bind(free_camera, Binding::key(GLFW_KEY_C));
-        map.bind(fly_up, Binding::key(GLFW_KEY_E)).bind(fly_down, Binding::key(GLFW_KEY_Q));
-        map.bind(fly_fast, Binding::key(GLFW_KEY_LEFT_SHIFT));
-        map.bind(toggle_capture, Binding::key(GLFW_KEY_TAB));
-        map.bind(toggle_wireframe, Binding::key(GLFW_KEY_F2)).bind(toggle_chunks, Binding::key(GLFW_KEY_F3));
-        map.bind(toggle_slice, Binding::key(GLFW_KEY_F4)).bind(reload_spells, Binding::key(GLFW_KEY_F5));
-        map.bind(toggle_trace, Binding::key(GLFW_KEY_F6));
-        for (std::size_t i = 0; i < slot.size(); ++i) map.bind(slot[i], Binding::key(GLFW_KEY_1 + static_cast<int>(i)));
+        map.bind(forward, InputSystem::Key::W).bind(forward, InputSystem::Key::Up);
+        map.bind(back, InputSystem::Key::S).bind(back, InputSystem::Key::Down);
+        map.bind(left, InputSystem::Key::A).bind(left, InputSystem::Key::Left);
+        map.bind(right, InputSystem::Key::D).bind(right, InputSystem::Key::Right);
+        map.bind(jump, InputSystem::Key::Space);
+        map.bind(cast_personal, InputSystem::MouseButton::Left);
+        map.bind(cast_ambient, InputSystem::MouseButton::Right);
+        map.bind(free_camera, InputSystem::Key::C);
+        map.bind(fly_up, InputSystem::Key::E).bind(fly_down, InputSystem::Key::Q);
+        map.bind(fly_fast, InputSystem::Key::LeftShift);
+        map.bind(toggle_capture, InputSystem::Key::Tab);
+        map.bind(toggle_wireframe, InputSystem::Key::F2).bind(toggle_chunks, InputSystem::Key::F3);
+        map.bind(toggle_slice, InputSystem::Key::F4).bind(reload_spells, InputSystem::Key::F5);
+        map.bind(toggle_trace, InputSystem::Key::F6);
+        for (std::size_t i = 0; i < slot.size(); ++i) map.bind(slot[i], InputSystem::key_from_digit(static_cast<int>(i) + 1));
     }
 };
 
@@ -115,14 +114,16 @@ public:
             if (args[i] == "--spells") spells_dir = args[i + 1];
         }
         autoplay = std::ranges::find(args, "--autoplay") != args.end();
-        for (std::size_t i = 0; i + 1 < args.size(); ++i) { // --bindings файл: привязки игрока (формат — Actions::map.serialize())
+        for (std::size_t i = 0; i + 1 < args.size(); ++i) { // --bindings файл: привязки игрока (формат — Actions::map.to_text())
             if (args[i] != "--bindings") continue;
             std::ifstream file(args[i + 1]);
             std::stringstream text;
             text << file.rdbuf();
-            if (auto ok = actions.map.apply(text.str()); !ok) throw std::runtime_error(args[i + 1] + ": " + ok.error());
+            auto loaded = InputSystem::ActionMap::from_text(text.str());
+            if (!loaded) throw std::runtime_error(args[i + 1] + ": " + loaded.error());
+            actions.map = std::move(*loaded);
         }
-        if (std::ranges::find(args, "--print-bindings") != args.end()) std::print("{}", actions.map.serialize());
+        if (std::ranges::find(args, "--print-bindings") != args.end()) std::print("{}", actions.map.to_text());
         for (std::size_t i = 0; i + 1 < args.size(); ++i) { // --show slice,trace,chunks,wire: включить отладочные слои сразу
             if (args[i] != "--show") continue;
             show_slice = args[i + 1].contains("slice"), show_trace = args[i + 1].contains("trace"), show_chunks = args[i + 1].contains("chunks");
@@ -172,26 +173,26 @@ public:
         const auto& in = window.input();
 
         // Игра спрашивает про действия, а не про клавиши: привязки живут в `Actions` и в файле игрока.
-        const Core::ActionMap& act = actions.map;
-        if (act.pressed(in, actions.toggle_capture)) capture(app, !captured);
-        if (act.pressed(in, actions.free_camera)) rig.toggle();
-        if (act.pressed(in, actions.toggle_wireframe)) terrain_view->set_wireframe(!terrain_view->wireframe());
-        if (act.pressed(in, actions.toggle_chunks)) show_chunks = !show_chunks;
-        if (act.pressed(in, actions.toggle_slice)) show_slice = !show_slice;
-        if (act.pressed(in, actions.toggle_trace)) show_trace = !show_trace;
-        if (act.pressed(in, actions.reload_spells)) reload_spells(spells_path);
+        const InputSystem::ActionMap& act = actions.map;
+        if (act.pressed(actions.toggle_capture, in)) capture(app, !captured);
+        if (act.pressed(actions.free_camera, in)) rig.toggle();
+        if (act.pressed(actions.toggle_wireframe, in)) terrain_view->set_wireframe(!terrain_view->wireframe());
+        if (act.pressed(actions.toggle_chunks, in)) show_chunks = !show_chunks;
+        if (act.pressed(actions.toggle_slice, in)) show_slice = !show_slice;
+        if (act.pressed(actions.toggle_trace, in)) show_trace = !show_trace;
+        if (act.pressed(actions.reload_spells, in)) reload_spells(spells_path);
         for (int i = 0; i < Character::Grimoire::slot_count; ++i) {
-            if (act.pressed(in, actions.slot[static_cast<std::size_t>(i)])) slot = i;
+            if (act.pressed(actions.slot[static_cast<std::size_t>(i)], in)) slot = i;
         }
         if (captured) {
-            const WindowSystem::Vec2d d = in.cursor_delta();
+            const InputSystem::Vec2d d = in.cursor_delta();
             rig.look(static_cast<float>(d.x), static_cast<float>(d.y));
         }
 
-        const float forward_axis = act.axis(in, actions.forward, actions.back), right_axis = act.axis(in, actions.right, actions.left);
+        const float forward_axis = (act.value(actions.forward, in) - act.value(actions.back, in)), right_axis = (act.value(actions.right, in) - act.value(actions.left, in));
         if (rig.is_free()) {
-            rig.free_speed = act.down(in, actions.fly_fast) ? 60.0f : 18.0f;
-            rig.fly(forward_axis, right_axis, act.axis(in, actions.fly_up, actions.fly_down), seconds);
+            rig.free_speed = act.down(actions.fly_fast, in) ? 60.0f : 18.0f;
+            rig.fly(forward_axis, right_axis, (act.value(actions.fly_up, in) - act.value(actions.fly_down, in)), seconds);
             wish = {};
         } else {
             // Ходьба относительно камеры: ввод → направление в плоскости, квантованное в Fixed один раз.
@@ -200,9 +201,9 @@ public:
             glm::vec3 w = f * forward_axis + r * right_axis;
             if (glm::length(w) > 1.0f) w = glm::normalize(w);
             wish = {Fixed::from_double(w.x), Fixed::from_double(w.z)};
-            if (act.pressed(in, actions.jump)) pending_jump = true;
-            if (captured && act.pressed(in, actions.cast_personal)) pending_cast = Runes::ManaSource::Personal;
-            if (captured && act.pressed(in, actions.cast_ambient)) pending_cast = Runes::ManaSource::Ambient;
+            if (act.pressed(actions.jump, in)) pending_jump = true;
+            if (captured && act.pressed(actions.cast_personal, in)) pending_cast = Runes::ManaSource::Personal;
+            if (captured && act.pressed(actions.cast_ambient, in)) pending_cast = Runes::ManaSource::Ambient;
         }
 
         const glm::dvec3 eye = current_eye(app.tick_alpha());
@@ -465,5 +466,5 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    return Core::run<FirstSpell>({.title = "FirstSpell", .ticks_per_second = 60.0, .pause_key = GLFW_KEY_P, .camera_controls = false, .clear_rgba = 0x8CBDF2FF}, argc, argv);
+    return Core::run<FirstSpell>({.title = "FirstSpell", .ticks_per_second = 60.0, .pause_key = InputSystem::Key::P, .camera_controls = false, .clear_rgba = 0x8CBDF2FF}, argc, argv);
 }
