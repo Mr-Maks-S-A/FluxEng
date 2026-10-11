@@ -12,6 +12,7 @@
 #   RuneCell     — заклинание как живая клетка: руны-атомы с валентностью, мембрана, деление, обмен маны
 #   RuneCell2    — заклинание-граф: вид сверху на SDF-мир, поле маны и визуальный редактор рун (RuneEditor); уровни Challenge (--level)
 #   ModuleProof  — игра-проверка: все модули движка в живом приложении, чек-лист на экране (линкуется с engine::FluxEng)
+#   LivingVillage — вертикальный срез замысла: Искра (первая живая мана) среди восьми жителей четырёх укладов; консольный, детерминированный
 #   CoopScribe   — «пилот и писарь»: два игрока проходят уровень вместе по плохой сети (Net lockstep + SetProgram), консольная
 #   FirstSpell   — пре-альфа «Первое заклинание»: персонаж на SDF-ландшафте, руны, мана как поле, запись и повтор
 #   AssetLab     — путь ассета: glTF/PNG/JSON → cook → пак → VFS → менеджер с фоновой загрузкой → GPU (модуль движка в клиенте)
@@ -87,6 +88,14 @@ if(BUILD_TESTING)
     set_tests_properties(Sandbox.CoopScribe.terrible_network PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
     add_test(NAME Sandbox.CoopScribe.cheater COMMAND CoopScribe --level mound --cheat)
     set_tests_properties(Sandbox.CoopScribe.cheater PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "OK \\(читера поймали\\)" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+endif()
+
+# LivingVillage: «живая деревня» — Искра и жители, живущие с маной по-разному (ManaField + ECS + Phases + Replay). Консольный, без GPU.
+add_executable(LivingVillage living_village/main.cpp)
+target_link_libraries(LivingVillage PRIVATE engine::Gameplay SandboxWarnings)
+if(BUILD_TESTING)
+    add_test(NAME Sandbox.LivingVillage COMMAND LivingVillage --check)
+    set_tests_properties(Sandbox.LivingVillage PROPERTIES LABELS "sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
 endif()
 
 # ReplayTool: просмотр и сравнение записей (файл самоописываем — нужен только Replay).

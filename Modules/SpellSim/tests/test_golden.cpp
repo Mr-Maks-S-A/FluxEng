@@ -73,6 +73,21 @@ Scenario scenario_b() {
     return s;
 }
 
+/// C: нехватка маны в окружении — оплата из поля проваливается (провал должен возвращать ману и магу, и полю):
+/// маг стоит на месте; шар (240 маны) из окружения вырезается повторно, пока поле вокруг не опустеет; затем «убегающий» цикл
+/// из окружения упирается в то же поле. Закрывает утечку маны из `Runes::SpellSystem::run` (конспекты 15–16).
+Scenario scenario_c() {
+    return {"spellsim_c", 7, 1200,
+            {{30, CastCommand{0, Runes::ManaSource::Ambient, down_forward}.encode()},
+             {60, CastCommand{0, Runes::ManaSource::Ambient, down_forward}.encode()},
+             {90, CastCommand{0, Runes::ManaSource::Ambient, down_forward}.encode()},
+             {120, CastCommand{0, Runes::ManaSource::Ambient, down_forward}.encode()},
+             {300, CastCommand{2, Runes::ManaSource::Ambient, down_forward}.encode()},
+             {420, CastCommand{0, Runes::ManaSource::Ambient, down_forward}.encode()},
+             {700, CastCommand{1, Runes::ManaSource::Ambient, down_forward}.encode()},
+             {900, CastCommand{0, Runes::ManaSource::Personal, down_forward}.encode()}}};
+}
+
 void load_spells(Simulation& sim) {
     // Те же тексты, что в Sandbox/first_spell/spells: эталон не должен зависеть от того, где лежат файлы.
     REQUIRE(sim.programs().add_text("carve", "TARGET\nPUSH 2\nCARVE\nHALT\n").has_value());
@@ -141,6 +156,8 @@ void check_golden(const Scenario& sc) {
 TEST_CASE("Golden: сценарий A (сид 1, прогулка, оба заклинания, убегающий цикл) воспроизводится побитово") { check_golden(scenario_a()); }
 
 TEST_CASE("Golden: сценарий B (сид 42, движение к краю мира, частые касты) воспроизводится побитово") { check_golden(scenario_b()); }
+
+TEST_CASE("Golden: сценарий C (сид 7, нехватка маны в окружении: провал оплаты возвращает ману) воспроизводится побитово") { check_golden(scenario_c()); }
 
 TEST_CASE("Golden: эталоны чувствительны — другой сид или одна лишняя команда дают другие хеши") {
     if (std::getenv("FLUX_UPDATE_GOLDEN") != nullptr) return;

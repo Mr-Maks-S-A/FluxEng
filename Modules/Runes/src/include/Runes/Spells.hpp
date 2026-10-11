@@ -97,6 +97,11 @@ public:
     virtual bool take_personal(ECS::Entity caster, Math::Mana amount) = 0;
     /// @brief Добавляет магу ману (руна DRAW).
     virtual void give_personal(ECS::Entity caster, Math::Mana amount) = 0;
+    /**
+     * @brief Возвращает в поле ману, которую заклинание забрало, но не смогло оплатить руну целиком (провал оплаты из окружения).
+     * Без возврата проваленный каст «съедал» бы ману поля безвозвратно. По умолчанию ничего не делает (хозяину без поля мана не нужна).
+     */
+    virtual void return_ambient(Math::WorldPos /*pos*/, Math::Mana /*amount*/) {}
 };
 
 // ---- Компоненты активного заклинания (сущность ECS) ----

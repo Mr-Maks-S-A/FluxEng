@@ -62,6 +62,7 @@ public:
         pool->current -= amount;
         return true;
     }
+    void return_ambient(WorldPos pos, Mana amount) override { m_sim.m_mana.inject(pos, amount); }
     void give_personal(ECS::Entity caster, Mana amount) override {
         if (Character::ManaPool* pool = m_sim.m_world.get<Character::ManaPool>(caster)) pool->current = Math::min(pool->max, pool->current + amount);
     }

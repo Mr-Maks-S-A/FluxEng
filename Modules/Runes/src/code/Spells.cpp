@@ -213,9 +213,16 @@ void SpellSystem::run(ECS::World& world, SpellHost& host, EffectBuffer& effects,
         if (budget.source == ManaSource::Personal) {
             if (!host.take_personal(who.caster, amount)) return fail(Failure::OutOfMana), false;
         } else {
-            if (!host.take_personal(who.caster, amount / Fixed::from_int(m_tuning.ambient_divisor))) return fail(Failure::OutOfMana), false;
-            const Mana got = host.draw(host.position(who.caster), m_tuning.ambient_radius, amount);
-            if (got < amount) return fail(Failure::OutOfMana), false;
+            // Оплата из окружения — всё или ничего: провал возвращает и долю мага, и то, что успело отдать поле.
+            const Mana personal_share = amount / Fixed::from_int(m_tuning.ambient_divisor);
+            if (!host.take_personal(who.caster, personal_share)) return fail(Failure::OutOfMana), false;
+            const WorldPos at = host.position(who.caster);
+            const Mana got = host.draw(at, m_tuning.ambient_radius, amount);
+            if (got < amount) {
+                host.give_personal(who.caster, personal_share);
+                host.return_ambient(at, got);
+                return fail(Failure::OutOfMana), false;
+            }
         }
         budget.remaining -= amount;
         budget.spent += amount;

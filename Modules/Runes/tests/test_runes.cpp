@@ -38,6 +38,10 @@ struct MockHost final : SpellHost {
         return true;
     }
     void give_personal(ECS::Entity, Mana amount) override { personal += amount; }
+    void return_ambient(WorldPos, Mana amount) override {
+        field += amount;
+        field_spent -= amount;
+    }
 };
 
 struct Rig {
@@ -250,6 +254,19 @@ TEST_CASE("если поле отдало меньше нужного, закл�
     CHECK(rig.system.last_trace().failure == Failure::OutOfMana);
     CHECK(rig.system.last_trace().failed_pc == 2); // CARVE
     CHECK(rig.carved().empty());
+}
+
+TEST_CASE("провал оплаты из окружения ничего не списывает: ни с мага, ни с поля") {
+    Rig rig;
+    rig.host.field = 50_mana; // эффект стоит ~240: поле отдаст меньше
+    const Mana personal_before = rig.host.personal;
+    rig.cast("TARGET\nPUSH 2\nCARVE\nHALT\n", ManaSource::Ambient);
+    rig.run_ticks(1);
+    CHECK(rig.system.last_trace().failure == Failure::OutOfMana);
+    // Заплачено лишь за руны TARGET и PUSH (две малых цены по 0,05; с мага — 1/10). За CARVE — ничего: то, что поле успело отдать, вернулось.
+    CHECK(rig.host.field_spent.to_double() == doctest::Approx(2 * 0.05).epsilon(0.001));
+    CHECK(rig.host.field.to_double() == doctest::Approx(50 - 2 * 0.05).epsilon(0.001));
+    CHECK((personal_before - rig.host.personal).to_double() == doctest::Approx(2 * 0.05 / 10).epsilon(0.001));
 }
 
 TEST_CASE("заклинания исполняются в порядке id, независимо от порядка в пуле") {
