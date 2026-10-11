@@ -2,7 +2,7 @@
  * @example 01_two_peers.cpp
  * Два игрока по сети: каждый шлёт свои команды, оба исполняют одни и те же тики и получают одно и то же состояние.
  *
- * «Симуляция» — крошечный счётчик; сеть — `LoopbackNetwork` в памяти (с задержкой). Настоящий UDP подключается через
+ * «Симуляция» — крошечный счётчик; сеть — `SimulatedNetwork` в памяти (с задержкой). Настоящий UDP подключается через
  * `Net::Transport` — протокол (`Lockstep`) про сокеты ничего не знает.
  *
  * Весь цикл игры на один кадр — четыре строки на пира: `pump`, `submit` (если нужен ввод), `advance` (если готовы), `report_hashes`.
@@ -40,7 +40,8 @@ struct Counter {
 };
 
 int main() {
-    Net::LoopbackNetwork network(2, {.latency_steps = 2});
+    Net::SimulatedNetwork network(1, {.latency_us = 2000});
+    network.add_endpoint(), network.add_endpoint();
     Net::LockstepConfig config{.peers = 2, .seed = 42, .config_hash = 1, .input_delay = 3};
     config.local = 0;
     Net::Lockstep alice(network.endpoint(0), config);
@@ -62,12 +63,12 @@ int main() {
         const Replay::Command b_cmd{.type = Add, .x = 100};
         frame(alice, sim_a, i % 10 == 0 ? std::span(&a_cmd, 1) : std::span<const Replay::Command>{});
         frame(bob, sim_b, i % 15 == 0 ? std::span(&b_cmd, 1) : std::span<const Replay::Command>{});
-        network.step();
+        network.advance_by(1000);
     }
     std::printf("Алиса: тик %u, сумма %lld;  Боб: тик %u, сумма %lld\n", sim_a.ticks, static_cast<long long>(sim_a.sum), sim_b.ticks, static_cast<long long>(sim_b.sum));
 
     // Пиры могут отличаться на тик-два (кто успел шагнуть в этом кадре): догоняем, затем сравниваем.
-    while (sim_a.ticks != sim_b.ticks) frame(sim_a.ticks < sim_b.ticks ? alice : bob, sim_a.ticks < sim_b.ticks ? sim_a : sim_b, {}), network.step();
+    while (sim_a.ticks != sim_b.ticks) frame(sim_a.ticks < sim_b.ticks ? alice : bob, sim_a.ticks < sim_b.ticks ? sim_a : sim_b, {}), network.advance_by(1000);
     EXPECT(sim_a.ticks > 100);
     EXPECT(sim_a.sum == sim_b.sum);
     EXPECT(!alice.desync() && !bob.desync());

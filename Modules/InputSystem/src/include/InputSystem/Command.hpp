@@ -8,7 +8,7 @@
  * InputState + ActionMap ──sample()──► InputCommand (16 байт) ──► сеть / запись ──► симуляция на всех узлах
  * ```
  * Симуляция читает только команду — ей всё равно, клавиатура это, геймпад или бот. Структура без padding и без float
- * (`has_unique_object_representations`), поэтому подходит как команда NetSystem::Lockstep: одинаковые байты на всех платформах.
+ * (`has_unique_object_representations`), поэтому подходит для сети (Net::Lockstep возит `Replay::Command` тех же 16 байт, упаковка — в Tests/integration/test_input_lockstep.cpp): одинаковые байты на всех платформах.
  *
  * Состав команды задаёт CommandLayout: какие действия — кнопки (до 32), какие — оси (до 6). Раскладка одинакова у всех узлов
  * и зашита в игру; в сеть уходят только числа.

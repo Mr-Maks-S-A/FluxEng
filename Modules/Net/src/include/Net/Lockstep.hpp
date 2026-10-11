@@ -23,6 +23,11 @@
  * заклинания для `SetProgram`) идут блобами по хешу с подтверждением. Команда, ссылающаяся на блоб (`set_blob_reference`),
  * не исполняется, пока блоб не пришёл и не сошёлся с хешем.
  *
+ * **Топологии.** По умолчанию каждый связан с каждым напрямую (**mesh**, p2p): каждый шлёт только свои команды.
+ * Для **звезды** клиентам указывают одного соседа — сервер (`neighbors = {0}`), а серверу `relay = true`: он пересылает
+ * команды, блобы и подтверждения между клиентами и сам тоже симулирует. Хеши состояния сверяются между соседями:
+ * в звезде клиенты видят только сервер, а у них с ним всё сходится, пока сходится со всеми.
+ *
  * **Доверие.** Все пакеты проверяются (`Net::decode`), но пиры считаются честными: чужой «мёртвый» блоб или молчание
  * останавливают игру (`stalled_pumps()`), а не портят её; исключение пира и защита от нечестной игры — дело следующего слоя.
  */
@@ -45,6 +50,9 @@ struct LockstepConfig {
     std::uint32_t resend_interval = 4;       ///< Как часто (в `pump`) напоминать о себе, если нечего слать.
     std::size_t max_blob_chunks_per_pump = 2;///< Лимит кусков блоба на пира за `pump` (чтобы блоб не заглушил ввод).
     std::size_t max_stored_blobs = 256;
+    std::uint32_t max_window = 24;           ///< Тиков одного игрока в одном пакете.
+    std::vector<PeerId> neighbors{};         ///< С кем связаны напрямую; пусто — со всеми остальными (mesh).
+    bool relay = false;                      ///< Пересылать соседям чужие команды и блобы (сервер звезды).
 };
 
 /// @brief Расхождение состояний: первый тик и пир, у которого хеши отличаются, и названия разошедшихся подсистем.
@@ -58,6 +66,7 @@ struct LockstepStats {
     std::uint64_t packets_sent = 0, packets_received = 0, bad_packets = 0, bytes_sent = 0;
     std::uint64_t stalled_pumps = 0;      ///< Сколько раз `pump` застал игру неготовой к шагу.
     std::uint64_t blobs_received = 0, blobs_rejected = 0;
+    std::uint64_t input_conflicts = 0;    ///< Две разные команды одного игрока на один тик (в честной сети — всегда 0).
 };
 
 class Lockstep {
@@ -88,6 +97,8 @@ public:
     /// @brief Склеенные команды тика `tick()` (порядок пиров, внутри — порядок подачи) и переход к следующему тику.
     /// Span действителен до следующего `advance`.
     [[nodiscard]] std::span<const Replay::Command> advance();
+    /// @brief На какой тик попадут команды следующего `submit` (тик ввода = исполняемый + задержка).
+    [[nodiscard]] std::uint32_t next_input_tick() const noexcept { return m_local_next; }
     /// @brief Следующий тик к исполнению (= число уже исполненных).
     [[nodiscard]] std::uint32_t tick() const noexcept { return m_tick; }
 
@@ -98,12 +109,14 @@ public:
     [[nodiscard]] const std::vector<std::byte>* blob(std::uint64_t hash) const;
     [[nodiscard]] const LockstepStats& stats() const noexcept { return m_stats; }
     [[nodiscard]] const LockstepConfig& config() const noexcept { return m_config; }
+    /// @brief Соседи (с кем идёт обмен напрямую).
+    [[nodiscard]] const std::vector<PeerId>& neighbors() const noexcept { return m_neighbors; }
 
 private:
     struct OutgoingBlob {
         std::uint64_t hash = 0;
         std::vector<std::byte> bytes;
-        std::vector<bool> acked;               ///< По пирам.
+        std::vector<bool> acked;               ///< По пирам (не соседи, свой номер и источник — сразу true).
         std::vector<std::uint32_t> next_offset;///< По пирам: с какого места слать дальше.
     };
     struct Partial {
@@ -116,7 +129,8 @@ private:
     void send_packet(PeerId to, const Body& body);
     void handle(const Packet& packet);
     void send_hello();
-    void send_inputs(PeerId to);
+    void send_inputs(PeerId to, bool periodic);
+    void make_outgoing(std::uint64_t hash, std::span<const std::byte> bytes, PeerId except);
     void send_blobs();
     void compare(std::uint32_t tick, PeerId peer, const Replay::StateHashes& theirs);
     [[nodiscard]] std::size_t index(PeerId p) const noexcept { return p; }
@@ -129,8 +143,11 @@ private:
     std::uint32_t m_local_next = 0;                       ///< Первый ещё не поданный тик.
     std::vector<std::map<std::uint32_t, std::vector<Replay::Command>>> m_inputs; ///< По пирам: команды по тикам.
     std::vector<std::uint32_t> m_have;                    ///< По пирам: тики [0, have) есть подряд.
-    std::vector<std::uint32_t> m_peer_acked;              ///< По пирам: сколько моих тиков у них есть.
+    std::vector<std::vector<std::uint32_t>> m_peer_have;  ///< [пир][игрок]: сколько тиков игрока у пира есть подряд (его подтверждения).
+    std::vector<PeerId> m_neighbors;
+    std::vector<bool> m_is_neighbor;
     std::vector<bool> m_hello_seen;
+    std::vector<std::vector<std::uint32_t>> m_sent_have;  ///< [сосед]: какие подтверждения (m_have) ушли ему в последний раз.
     std::string m_failure;
     std::uint32_t m_pumps = 0;
 

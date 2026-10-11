@@ -8,7 +8,7 @@
  *
  * Что показывает пример (всё — готовые модули, в игре только склейка):
  * - **Challenge** — уровень, судья, эталонное решение (программы → писарь, бот-прицел → пилот);
- * - **Net** — lockstep поверх `LoopbackNetwork` с потерями, задержкой, дублями и порчей;
+ * - **Net** — lockstep поверх `SimulatedNetwork` с потерями, задержкой, дублями и порчей;
  * - **SpellSim** — `SetProgram` в потоке команд, блобы по хешу;
  * - **Runes** — `encode_program`, хеш программы.
  *
@@ -30,7 +30,7 @@ namespace {
 
 struct Options {
     std::string level = "mound";
-    Net::LinkConfig link{.latency_steps = 2, .jitter_steps = 3, .loss_permille = 150, .duplicate_permille = 50, .corrupt_permille = 20};
+    Net::LinkConfig link{.latency_us = 2000, .jitter_us = 3000, .loss = 0.15, .duplicate = 0.05, .corrupt = 0.02}; // 1 кадр = 1 мс сети
     std::uint32_t input_delay = 3;
     std::uint64_t net_seed = 1;
     bool cheat = false;
@@ -42,11 +42,11 @@ Options parse(int argc, char** argv) {
         const auto has_value = [&] { return i + 1 < argc; };
         const std::string a = argv[i];
         if (a == "--level" && has_value()) o.level = argv[++i];
-        else if (a == "--latency" && has_value()) o.link.latency_steps = static_cast<std::uint32_t>(std::atoi(argv[++i]));
-        else if (a == "--loss" && has_value()) o.link.loss_permille = static_cast<std::uint32_t>(std::atoi(argv[++i]));
-        else if (a == "--jitter" && has_value()) o.link.jitter_steps = static_cast<std::uint32_t>(std::atoi(argv[++i]));
-        else if (a == "--dup" && has_value()) o.link.duplicate_permille = static_cast<std::uint32_t>(std::atoi(argv[++i]));
-        else if (a == "--corrupt" && has_value()) o.link.corrupt_permille = static_cast<std::uint32_t>(std::atoi(argv[++i]));
+        else if (a == "--latency" && has_value()) o.link.latency_us = 1000ull * static_cast<std::uint32_t>(std::atoi(argv[++i])); // в кадрах
+        else if (a == "--loss" && has_value()) o.link.loss = std::atoi(argv[++i]) / 1000.0; // в промилле
+        else if (a == "--jitter" && has_value()) o.link.jitter_us = 1000ull * static_cast<std::uint32_t>(std::atoi(argv[++i]));
+        else if (a == "--dup" && has_value()) o.link.duplicate = std::atoi(argv[++i]) / 1000.0;
+        else if (a == "--corrupt" && has_value()) o.link.corrupt = std::atoi(argv[++i]) / 1000.0;
         else if (a == "--delay" && has_value()) o.input_delay = static_cast<std::uint32_t>(std::atoi(argv[++i]));
         else if (a == "--seed" && has_value()) o.net_seed = static_cast<std::uint64_t>(std::atoll(argv[++i]));
         else if (a == "--cheat") o.cheat = true;
@@ -123,10 +123,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::printf("CoopScribe: уровень «%s» — %s\n  сеть: задержка %u, разброс %u, потери %u‰, дубли %u‰, порча %u‰; задержка ввода %u тиков%s\n",
-                level->id.c_str(), level->title.c_str(), options.link.latency_steps, options.link.jitter_steps, options.link.loss_permille,
-                options.link.duplicate_permille, options.link.corrupt_permille, options.input_delay, options.cheat ? "; ЧИТ у писаря" : "");
+                level->id.c_str(), level->title.c_str(), static_cast<unsigned>(options.link.latency_us / 1000), static_cast<unsigned>(options.link.jitter_us / 1000),
+                static_cast<unsigned>(options.link.loss * 1000.0 + 0.5), static_cast<unsigned>(options.link.duplicate * 1000.0 + 0.5),
+                static_cast<unsigned>(options.link.corrupt * 1000.0 + 0.5), options.input_delay, options.cheat ? "; ЧИТ у писаря" : "");
 
-    Net::LoopbackNetwork network(2, options.link, options.net_seed);
+    Net::SimulatedNetwork network(options.net_seed, options.link);
+    network.add_endpoint();
+    network.add_endpoint();
     Player pilot(Player::Role::Pilot, *level, network.endpoint(0), 0, options.input_delay);
     Player scribe(Player::Role::Scribe, *level, network.endpoint(1), 1, options.input_delay);
 
@@ -134,15 +137,15 @@ int main(int argc, char** argv) {
     while (frames < 400000 && !(pilot.done() && scribe.done()) && !pilot.net().desync() && !scribe.net().desync()) {
         pilot.frame(*solution, options.cheat);
         scribe.frame(*solution, options.cheat);
-        network.step();
+        network.advance_by(1000);
         ++frames;
     }
     // Хвост: закончивший игрок продолжает слать; даём сети дожить, чтобы последние хеши дошли и сверились.
-    for (int i = 0; i < 200 && !pilot.net().desync() && !scribe.net().desync(); ++i) { pilot.frame(*solution, options.cheat); scribe.frame(*solution, options.cheat); network.step(); }
+    for (int i = 0; i < 200 && !pilot.net().desync() && !scribe.net().desync(); ++i) { pilot.frame(*solution, options.cheat); scribe.frame(*solution, options.cheat); network.advance_by(1000); }
 
     const auto& stats = network.stats();
     std::printf("  кадров %llu; пакетов %llu, потеряно %llu, испорчено %llu; у пилота отброшено контрольной суммой %llu, простоев %llu\n",
-                static_cast<unsigned long long>(frames), static_cast<unsigned long long>(stats.sent), static_cast<unsigned long long>(stats.lost),
+                static_cast<unsigned long long>(frames), static_cast<unsigned long long>(stats.sent), static_cast<unsigned long long>(stats.dropped),
                 static_cast<unsigned long long>(stats.corrupted), static_cast<unsigned long long>(pilot.net().stats().bad_packets),
                 static_cast<unsigned long long>(pilot.net().stats().stalled_pumps));
 

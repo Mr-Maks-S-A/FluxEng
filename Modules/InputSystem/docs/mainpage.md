@@ -19,7 +19,7 @@ InputSystem — собственные коды ввода движка и вс�
 | InputSystem::InputEvent | сырой ввод от платформы: клавиша, мышь, курсор, колесо, символ, фокус, геймпад |
 | InputSystem::InputState | зажато / нажато / отпущено в этом кадре, курсор и его дельта, колесо, текст, геймпады; потеря фокуса отпускает всё |
 | InputSystem::ActionMap | «jump», «move_x» ↔ клавиши, кнопки, оси; модификаторы (Ctrl+S), ось из пары клавиш, мёртвая зона; переназначение; **текст настроек** |
-| InputSystem::InputCommand | 16 байт без padding и без float: кнопки битами, оси int16; годится как команда NetSystem::Lockstep |
+| InputSystem::InputCommand | 16 байт без padding и без float: кнопки битами, оси int16; годится для сети (Net::Lockstep, упаковка в `Replay::Command` — см. Tests/integration/test_input_lockstep.cpp) |
 | InputSystem::InputLog | двоичная запись ввода по кадрам с версией и CRC-32; разбор не доверяет данным |
 
 ## Почему свои коды

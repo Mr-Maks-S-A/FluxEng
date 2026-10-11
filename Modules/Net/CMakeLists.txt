@@ -26,6 +26,7 @@ add_library(Net STATIC
     src/code/Wire.cpp
     src/code/Transport.cpp
     src/code/Lockstep.cpp
+    src/code/Node.cpp
 )
 add_library(engine::Net ALIAS Net)
 target_include_directories(Net PUBLIC

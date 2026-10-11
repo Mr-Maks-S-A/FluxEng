@@ -6,62 +6,101 @@
 
 namespace Net {
 
-class LoopbackNetwork::Endpoint final : public Transport {
+class SimulatedNetwork::Endpoint final : public Transport {
 public:
-    Endpoint(LoopbackNetwork& net, PeerId id) : m_net(net), m_id(id) {}
-    void send(PeerId to, std::span<const std::byte> bytes) override { m_net.deliver(m_id, to, bytes); }
+    Endpoint(SimulatedNetwork& network, PeerId id) noexcept : m_network(network), m_id(id) {}
+
+    [[nodiscard]] PeerId local_id() const noexcept override { return m_id; }
+    void send(PeerId to, std::span<const std::byte> bytes) override { m_network.enqueue(m_id, to, bytes); }
     [[nodiscard]] bool receive(Datagram& out) override {
         if (m_inbox.empty()) return false;
         out = std::move(m_inbox.front());
         m_inbox.pop_front();
         return true;
     }
-    std::deque<Datagram> m_inbox;
+    void deliver(Datagram datagram) { m_inbox.push_back(std::move(datagram)); }
 
 private:
-    LoopbackNetwork& m_net;
+    SimulatedNetwork& m_network;
     PeerId m_id;
+    std::deque<Datagram> m_inbox;
 };
 
-LoopbackNetwork::LoopbackNetwork(std::size_t peers, const LinkConfig& link, std::uint64_t seed) : m_link(link), m_rng(seed) {
-    for (std::size_t i = 0; i < peers; ++i) m_endpoints.push_back(std::make_unique<Endpoint>(*this, static_cast<PeerId>(i)));
-}
-LoopbackNetwork::~LoopbackNetwork() = default;
+SimulatedNetwork::SimulatedNetwork(std::uint64_t seed, LinkConfig default_link)
+    : m_state(seed * 6364136223846793005ull + 1442695040888963407ull), m_default(default_link) {}
 
-Transport& LoopbackNetwork::endpoint(PeerId peer) {
-    FLUX_ASSERT(peer < m_endpoints.size(), "LoopbackNetwork::endpoint: нет такого пира");
+SimulatedNetwork::~SimulatedNetwork() = default;
+
+Transport& SimulatedNetwork::add_endpoint() {
+    FLUX_ASSERT(m_endpoints.size() < no_peer, "SimulatedNetwork: слишком много узлов");
+    m_endpoints.push_back(std::make_unique<Endpoint>(*this, static_cast<PeerId>(m_endpoints.size())));
+    return *m_endpoints.back();
+}
+
+Transport& SimulatedNetwork::endpoint(PeerId peer) {
+    FLUX_ASSERT(peer < m_endpoints.size(), "SimulatedNetwork::endpoint: нет такого узла");
     return *m_endpoints[peer];
 }
 
-void LoopbackNetwork::deliver(PeerId from, PeerId to, std::span<const std::byte> bytes) {
+// PCG32 (XSH-RR): одинаков на всех платформах и стандартных библиотеках.
+std::uint32_t SimulatedNetwork::next_u32() noexcept {
+    const std::uint64_t old = m_state;
+    m_state = old * 6364136223846793005ull + 1442695040888963407ull;
+    const auto xorshifted = static_cast<std::uint32_t>(((old >> 18u) ^ old) >> 27u);
+    const auto rot = static_cast<std::uint32_t>(old >> 59u);
+    return (xorshifted >> rot) | (xorshifted << ((~rot + 1u) & 31u));
+}
+
+double SimulatedNetwork::next_unit() noexcept { return static_cast<double>(next_u32()) / 4294967296.0; }
+
+void SimulatedNetwork::enqueue(PeerId from, PeerId to, std::span<const std::byte> data) {
     ++m_stats.sent;
-    m_stats.bytes += bytes.size();
-    if (to >= m_endpoints.size()) { ++m_stats.lost; return; }
-    if (m_rng.below(1000) < m_link.loss_permille) { ++m_stats.lost; return; }
-    const int copies = m_rng.below(1000) < m_link.duplicate_permille ? 2 : 1;
-    if (copies == 2) ++m_stats.duplicated;
-    for (int i = 0; i < copies; ++i) {
-        InFlight f{m_now + m_link.latency_steps + m_rng.below(m_link.jitter_steps + 1), to, Datagram{from, {bytes.begin(), bytes.end()}}};
-        if (!f.datagram.bytes.empty() && m_rng.below(1000) < m_link.corrupt_permille) {
-            const std::uint32_t bit = m_rng.below(static_cast<std::uint32_t>(f.datagram.bytes.size() * 8));
-            f.datagram.bytes[bit / 8] ^= static_cast<std::byte>(1u << (bit % 8));
+    m_stats.bytes_sent += data.size();
+    if (data.size() > max_packet_size) {
+        ++m_stats.oversized;
+        return;
+    }
+    if (to >= m_endpoints.size()) {
+        ++m_stats.dropped;
+        return;
+    }
+    const auto link_it = m_links.find({from, to});
+    const LinkConfig& link = link_it != m_links.end() ? link_it->second : m_default;
+
+    // Случайные числа берутся в фиксированном порядке и всегда, независимо от исхода: поток не «съезжает» от настроек.
+    const double loss_roll = next_unit();
+    const double dup_roll = next_unit();
+    const std::uint64_t jitter_a = link.jitter_us == 0 ? 0 : next_u32() % (link.jitter_us + 1);
+    const std::uint64_t jitter_b = link.jitter_us == 0 ? 0 : next_u32() % (link.jitter_us + 1);
+    const double corrupt_roll = next_unit();
+    const std::uint32_t corrupt_bit = next_u32();
+
+    if (loss_roll < link.loss) {
+        ++m_stats.dropped;
+        return;
+    }
+    const int copies = dup_roll < link.duplicate ? 2 : 1;
+    for (int copy = 0; copy < copies; ++copy) {
+        const std::uint64_t at = m_now + link.latency_us + (copy == 0 ? jitter_a : jitter_b);
+        InFlight packet{from, to, std::vector<std::byte>(data.begin(), data.end())};
+        if (copy == 0 && !packet.data.empty() && corrupt_roll < link.corrupt) { // порча одной копии: один бит
+            const std::size_t bit = corrupt_bit % (packet.data.size() * 8);
+            packet.data[bit / 8] ^= static_cast<std::byte>(1u << (bit % 8));
             ++m_stats.corrupted;
         }
-        m_flight.push_back(std::move(f));
+        m_in_flight.emplace(std::pair{at, m_seq++}, std::move(packet));
+        if (copy == 1) ++m_stats.duplicated;
     }
 }
 
-void LoopbackNetwork::step() {
-    ++m_now;
-    // Созревшие — в почтовые ящики, в порядке времени созревания (при равенстве — в порядке отправки): перестановка возникает от разброса.
-    std::stable_sort(m_flight.begin(), m_flight.end(), [](const InFlight& a, const InFlight& b) { return a.ready_at < b.ready_at; });
-    std::size_t done = 0;
-    while (done < m_flight.size() && m_flight[done].ready_at <= m_now) {
-        m_endpoints[m_flight[done].to]->m_inbox.push_back(std::move(m_flight[done].datagram));
+void SimulatedNetwork::advance_to(std::uint64_t now_us) {
+    m_now = std::max(m_now, now_us);
+    while (!m_in_flight.empty() && m_in_flight.begin()->first.first <= m_now) {
+        auto node = m_in_flight.extract(m_in_flight.begin());
+        InFlight& packet = node.mapped();
+        m_endpoints[packet.to]->deliver(Datagram{packet.from, std::move(packet.data)});
         ++m_stats.delivered;
-        ++done;
     }
-    m_flight.erase(m_flight.begin(), m_flight.begin() + static_cast<std::ptrdiff_t>(done));
 }
 
 } // namespace Net

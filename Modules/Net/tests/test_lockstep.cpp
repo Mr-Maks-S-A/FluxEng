@@ -48,14 +48,15 @@ std::optional<std::uint64_t> blob_ref(const Replay::Command& c) {
 }
 
 struct Party {
-    std::unique_ptr<LoopbackNetwork> net;
+    std::unique_ptr<SimulatedNetwork> net;
     std::vector<std::unique_ptr<Lockstep>> peers;
     std::vector<Toy> sims;
     std::vector<Math::Rng> inputs;
     std::vector<std::vector<Replay::Command>> injected; ///< Команды, которые пир добавит в ближайший свой ввод.
     std::uint32_t cap = ~0u;                            ///< Пир не исполняет тики после этого (но продолжает подавать ввод).
 
-    Party(std::size_t n, const LinkConfig& link, std::uint64_t seed = 1, std::uint32_t delay = 3) : net(std::make_unique<LoopbackNetwork>(n, link, seed)), sims(n) {
+    Party(std::size_t n, const LinkConfig& link, std::uint64_t seed = 1, std::uint32_t delay = 3) : net(std::make_unique<SimulatedNetwork>(seed, link)), sims(n) {
+        for (std::size_t i = 0; i < n; ++i) net->add_endpoint();
         for (std::size_t i = 0; i < n; ++i) {
             LockstepConfig config{.local = static_cast<PeerId>(i), .peers = static_cast<std::uint8_t>(n), .seed = 9, .config_hash = 0xC0FFEE, .input_delay = delay};
             peers.push_back(std::make_unique<Lockstep>(net->endpoint(static_cast<PeerId>(i)), config));
@@ -82,7 +83,7 @@ struct Party {
                 p.report_hashes(sims[i].hashes());
             }
         }
-        net->step();
+        net->advance_by(1000);
     }
     void run(int frames) { for (int i = 0; i < frames; ++i) frame(); }
     /// Все пиры доходят ровно до тика `target` (и стоят там): состояния сравнимы тик в тик. Плохой сети нужно больше кадров.
@@ -120,10 +121,10 @@ TEST_CASE("идеальная сеть: два пира идут в ногу, с
 
 TEST_CASE("плохая сеть: задержка, разброс, потери 20%, дубли и порча — на том же тике то же состояние, что и без неё") {
     Party ideal(2, {}, 1);
-    Party bad(2, {.latency_steps = 3, .jitter_steps = 4, .loss_permille = 200, .duplicate_permille = 100, .corrupt_permille = 50}, 7);
+    Party bad(2, {.latency_us = 3000, .jitter_us = 4000, .loss = 0.2, .duplicate = 0.1, .corrupt = 0.05}, 7);
     ideal.run_to(500);
     bad.run_to(500); // плохой сети нужно больше кадров, но состояние на тике 500 то же: ввод каждого пира зависит только от номера тика
-    CHECK(bad.net->stats().lost > 0);
+    CHECK(bad.net->stats().dropped > 0);
     CHECK(bad.net->stats().corrupted > 0);
     CHECK(bad.peers[0]->stats().bad_packets + bad.peers[1]->stats().bad_packets > 0); // порча поймана контрольной суммой
     CHECK_FALSE(bad.peers[0]->desync().has_value());
@@ -134,7 +135,7 @@ TEST_CASE("плохая сеть: задержка, разброс, потери
 }
 
 TEST_CASE("итог не зависит от качества сети: три пира, три разные сети — одно состояние на тике 400") {
-    Party a(3, {}, 1), b(3, {.latency_steps = 2, .jitter_steps = 3, .loss_permille = 150}, 5), c(3, {.latency_steps = 6, .loss_permille = 300, .duplicate_permille = 200}, 9);
+    Party a(3, {}, 1), b(3, {.latency_us = 2000, .jitter_us = 3000, .loss = 0.15}, 5), c(3, {.latency_us = 6000, .loss = 0.3, .duplicate = 0.2}, 9);
     a.run_to(400);
     b.run_to(400);
     c.run_to(400);
@@ -145,7 +146,7 @@ TEST_CASE("итог не зависит от качества сети: три �
 }
 
 TEST_CASE("три пира: ввод каждого учитывается, никто не отстаёт и не расходится") {
-    Party party(3, {.latency_steps = 1, .jitter_steps = 2, .loss_permille = 50}, 3);
+    Party party(3, {.latency_us = 1000, .jitter_us = 2000, .loss = 0.05}, 3);
     party.run_to(300);
     CHECK(party.sims[0].sum == party.sims[1].sum);
     CHECK(party.sims[1].sum == party.sims[2].sum);
@@ -153,7 +154,7 @@ TEST_CASE("три пира: ввод каждого учитывается, ни
 }
 
 TEST_CASE("блоб: большая программа доходит по плохой сети, команда ждёт её и исполняется у всех одинаково") {
-    Party party(2, {.latency_steps = 2, .jitter_steps = 2, .loss_permille = 250}, 11);
+    Party party(2, {.latency_us = 2000, .jitter_us = 2000, .loss = 0.25}, 11);
     std::vector<std::byte> program(2600); // три куска
     for (std::size_t i = 0; i < program.size(); ++i) program[i] = static_cast<std::byte>(i * 31);
     party.run(10);
@@ -166,36 +167,38 @@ TEST_CASE("блоб: большая программа доходит по пл�
     CHECK(party.sims[0].sum == party.sims[1].sum);
     CHECK(party.peers[1]->stats().blobs_received == 1);
     // Блоб действительно был исполнен (иначе тест ничего не проверял): без него сумма случайных Add другая.
-    Party without(2, {.latency_steps = 2, .jitter_steps = 2, .loss_permille = 250}, 11);
+    Party without(2, {.latency_us = 2000, .jitter_us = 2000, .loss = 0.25}, 11);
     without.run(10);
     without.run_to(400);
     CHECK(party.sims[0].sum - without.sims[0].sum == 2600);
 }
 
 TEST_CASE("несовпадение настройки или сида — отказ при знакомстве, шаг не делается") {
-    LoopbackNetwork net(2);
+    SimulatedNetwork net;
+    net.add_endpoint(), net.add_endpoint();
     Lockstep a(net.endpoint(0), {.local = 0, .peers = 2, .seed = 1, .config_hash = 111});
     Lockstep b(net.endpoint(1), {.local = 1, .peers = 2, .seed = 1, .config_hash = 222});
     for (int i = 0; i < 50; ++i) {
         a.pump(); b.pump();
         if (a.needs_input()) a.submit({});
         if (b.needs_input()) b.submit({});
-        net.step();
+        net.advance_by(1000);
     }
     CHECK_FALSE(a.ready());
     CHECK_FALSE(b.ready());
     CHECK(a.failure().find("настройка") != std::string::npos);
     CHECK_FALSE(a.connected());
 
-    LoopbackNetwork net2(2);
+    SimulatedNetwork net2;
+    net2.add_endpoint(), net2.add_endpoint();
     Lockstep c(net2.endpoint(0), {.local = 0, .peers = 2, .seed = 1});
     Lockstep d(net2.endpoint(1), {.local = 1, .peers = 2, .seed = 2});
-    for (int i = 0; i < 20; ++i) { c.pump(); d.pump(); net2.step(); }
+    for (int i = 0; i < 20; ++i) { c.pump(); d.pump(); net2.advance_by(1000); }
     CHECK(c.failure().find("сид") != std::string::npos);
 }
 
 TEST_CASE("расхождение: недетерминированный пир обнаружен на первом тике, называется подсистема") {
-    Party party(2, {.latency_steps = 1}, 4);
+    Party party(2, {.latency_us = 1000}, 4);
     party.run(60);
     party.sims[1].poison = 1; // с этого момента второй пир считает «по-своему»
     party.run(200);
@@ -207,21 +210,22 @@ TEST_CASE("расхождение: недетерминированный пир
 }
 
 TEST_CASE("обрыв связи: игра не падает и не идёт, после восстановления догоняет") {
-    Party party(2, {.latency_steps = 1}, 8);
+    Party party(2, {.latency_us = 1000}, 8);
     party.run(100);
     const std::uint32_t before = party.sims[0].ticks;
-    party.net->set_link({.loss_permille = 1000});
+    party.net->set_default_link({.loss = 1});
     party.run(200);
     CHECK(party.sims[0].ticks <= before + 10); // уже подтверждённая задержка ввода позволяет пройти пару тиков, не больше
     CHECK(party.peers[0]->stats().stalled_pumps > 100);
-    party.net->set_link({.latency_steps = 1});
+    party.net->set_default_link({.latency_us = 1000});
     party.run(300);
     CHECK(party.sims[0].ticks > before + 200);
     CHECK(party.sims[0].sum == party.sims[1].sum);
 }
 
 TEST_CASE("один игрок: сеть не нужна, шаги идут сразу") {
-    LoopbackNetwork net(1);
+    SimulatedNetwork net;
+    net.add_endpoint();
     Lockstep solo(net.endpoint(0), {.local = 0, .peers = 1});
     for (int i = 0; i < 20; ++i) {
         solo.pump();
@@ -233,14 +237,15 @@ TEST_CASE("один игрок: сеть не нужна, шаги идут ср
 }
 
 TEST_CASE("чужие и испорченные датаграммы не ломают протокол") {
-    LoopbackNetwork net(2);
+    SimulatedNetwork net;
+    net.add_endpoint(), net.add_endpoint();
     Lockstep a(net.endpoint(0), {.local = 0, .peers = 2, .seed = 1});
     const std::byte junk[] = {std::byte{1}, std::byte{2}};
     net.endpoint(1).send(0, junk);
     // «подделка отправителя»: пакет от пира 1 с полем from = 0
     const auto spoof = encode(Packet{0, BlobAck{1}});
     net.endpoint(1).send(0, spoof);
-    net.step();
+    net.advance_by(1000);
     a.pump();
     CHECK(a.stats().bad_packets == 2);
 }

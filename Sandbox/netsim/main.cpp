@@ -3,7 +3,7 @@
  * @brief NetSim — несколько узлов «смотрят» на одну симуляцию через плохую сеть; проверка детерминизма и lockstep.
  *
  * Без окна и GPU. Каждый узел — свой RuntimeSystem::Runtime с модулем MagicWorld (ECS + JobSystem, только целые числа)
- * и свой транспорт; между узлами ходят лишь команды ввода (NetSystem::Lockstep). Сеть — SimulatedNetwork на виртуальном времени:
+ * и свой транспорт; между узлами ходят лишь команды ввода (Net::Node поверх Net::Lockstep). Сеть — SimulatedNetwork на виртуальном времени:
  * прогон не зависит от скорости машины и воспроизводим по `--seed`.
  *
  * Что проверяется:
@@ -18,7 +18,7 @@
 
 #include "Sim.hpp"
 
-#include <NetSystem/NetSystem.hpp>
+#include <Net/Net.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -30,7 +30,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ns = NetSystem;
+namespace ns = Net;
 namespace rs = RuntimeSystem;
 using netsim::Cmd;
 using netsim::MagicWorld;
@@ -68,7 +68,7 @@ bool parse(int argc, char** argv, Options& o) {
         const std::string_view arg = argv[i];
         const auto value = [&]() -> const char* { return i + 1 < argc ? argv[++i] : "0"; };
         if (arg == "--mode") o.mesh = std::string_view(value()) == "mesh";
-        else if (arg == "--players") o.players = std::max(1, std::atoi(value()));
+        else if (arg == "--players") o.players = std::clamp(std::atoi(value()), 1, static_cast<int>(ns::max_peers));
         else if (arg == "--ticks") o.ticks = static_cast<std::uint32_t>(std::atoi(value()));
         else if (arg == "--latency-ms") o.latency_ms = std::atof(value());
         else if (arg == "--jitter-ms") o.jitter_ms = std::atof(value());
@@ -98,7 +98,7 @@ bool parse(int argc, char** argv, Options& o) {
 struct Peer {
     std::unique_ptr<rs::Runtime> runtime;
     MagicWorld* world = nullptr;
-    std::unique_ptr<ns::LockstepNode<Cmd>> node;
+    std::unique_ptr<ns::Node> node;
     std::vector<std::uint64_t> history; // хеш после каждого тика
     int threads = 0;
 };
@@ -111,8 +111,7 @@ int main(int argc, char** argv) {
 
     ns::SimulatedNetwork net(o.seed, {.latency_us = static_cast<std::uint64_t>(o.latency_ms * 1000.0),
                                       .jitter_us = static_cast<std::uint64_t>(o.jitter_ms * 1000.0), .loss = o.loss, .duplicate = o.duplicate});
-    std::vector<ns::ITransport*> transports;
-    for (int i = 0; i < o.players; ++i) transports.push_back(&net.add_endpoint());
+    for (int i = 0; i < o.players; ++i) net.add_endpoint();
 
     std::vector<Peer> peers(static_cast<std::size_t>(o.players));
     for (int i = 0; i < o.players; ++i) {
@@ -123,28 +122,34 @@ int main(int argc, char** argv) {
         peer.world = &peer.runtime->add<MagicWorld>(o.seed, o.players, netsim::Corruption{o.corrupt_tick, i == o.corrupt_peer});
         peer.runtime->initialize();
 
-        ns::LockstepNodeConfig config;
-        config.lockstep.self = static_cast<ns::PeerId>(i);
+        ns::NodeConfig config;
+        config.lockstep.local = static_cast<ns::PeerId>(i);
+        config.lockstep.peers = static_cast<std::uint8_t>(o.players);
         config.lockstep.input_delay = o.input_delay;
-        for (int p = 0; p < o.players; ++p) config.lockstep.players.push_back(static_cast<ns::PeerId>(p));
-        for (int p = 0; p < o.players; ++p) {
-            const bool linked = o.mesh ? p != i : (i == 0 ? p != 0 : p == 0); // звезда: узел 0 — сервер
-            if (linked) config.lockstep.neighbors.push_back(static_cast<ns::PeerId>(p));
-        }
-        config.lockstep.relay = !o.mesh && i == 0; // ретранслирует только сервер звезды
+        config.lockstep.config_hash = 0xC0FFEE;
+        if (!o.mesh && i != 0) config.lockstep.neighbors = {0}; // звезда: узел 0 — сервер, клиенты знают только его; у сервера пусто = все
+        config.lockstep.relay = !o.mesh && i == 0;              // ретранслирует только сервер звезды
         if (o.drift) config.clock_scale = 0.9 + 0.07 * static_cast<double>(i % 4); // 0.90 … 1.11
 
         const std::uint64_t seed = o.seed;
         Peer* self = &peer;
-        peer.node = std::make_unique<ns::LockstepNode<Cmd>>(
-            *transports[static_cast<std::size_t>(i)], config,
-            [seed](ns::PeerId player, std::uint32_t tick) { return netsim::bot_input(seed, player, tick); },
-            [self](std::span<const Cmd> inputs, std::uint32_t) {
+        const auto players = static_cast<std::size_t>(o.players);
+        peer.node = std::make_unique<ns::Node>(
+            net.endpoint(static_cast<ns::PeerId>(i)), config,
+            // Каждый игрок подаёт ровно одну команду на тик: номер команды в тике = номер игрока.
+            [seed](ns::PeerId player, std::uint32_t tick, std::vector<Replay::Command>& out) { out.push_back(netsim::to_command(netsim::bot_input(seed, player, tick))); },
+            [self, players](std::span<const Replay::Command> commands, std::uint32_t) {
+                std::vector<Cmd> inputs(players); // первые input_delay тиков приходят без команд: это «никто ничего не делает»
+                for (std::size_t k = 0; k < commands.size() && k < players; ++k) inputs[k] = netsim::from_command(commands[k]);
                 self->world->set_inputs(inputs);
                 self->runtime->tick(); // модули Runtime: MagicWorld::tick
                 self->history.push_back(self->world->hash());
             },
-            [self] { return self->world->hash(); });
+            [self] {
+                Replay::StateHashes h;
+                h.add("world", self->world->hash());
+                return h;
+            });
     }
 
     std::printf("NetSim: %s, %d игроков, %u тиков, сеть %.0f±%.0f мс, потери %.0f%%, дубликаты %.0f%%, input_delay %u, потоки %s%s\n",
@@ -183,11 +188,12 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < peers.size(); ++i) {
         const Peer& p = peers[i];
         const auto& stats = p.node->session().stats();
-        total_desyncs += stats.desyncs;
+        const std::uint64_t desyncs = p.node->session().desync().has_value() ? 1 : 0;
+        total_desyncs += desyncs;
         std::printf("%-5zu %-8d %-10u %016llx   %-8llu %-9llu %-10llu %-9llu %d\n", i, p.threads, p.node->tick(),
                     static_cast<unsigned long long>(common > 0 ? p.history[common - 1] : 0), static_cast<unsigned long long>(p.node->stalls()),
                     static_cast<unsigned long long>(stats.packets_sent), static_cast<unsigned long long>(stats.bytes_sent),
-                    static_cast<unsigned long long>(stats.desyncs), p.world->score(static_cast<int>(i)));
+                    static_cast<unsigned long long>(desyncs), p.world->score(static_cast<int>(i)));
     }
     const ns::NetworkStats& wire = net.stats();
     std::printf("\nсеть: отправлено %llu, потеряно %llu, дубликатов %llu, всего %.1f КБ; виртуального времени %.1f с\n",

@@ -38,12 +38,13 @@ struct World {
 };
 
 struct Pair {
-    Net::LoopbackNetwork network;
+    Net::SimulatedNetwork network;
     Net::Lockstep a, b;
     World wa, wb;
     explicit Pair(const Net::LinkConfig& link)
-        : network(2, link, 5), a(network.endpoint(0), {.local = 0, .peers = 2, .seed = 1, .config_hash = 2}),
-          b(network.endpoint(1), {.local = 1, .peers = 2, .seed = 1, .config_hash = 2}) {}
+        : network(5, link), a(add(0), {.local = 0, .peers = 2, .seed = 1, .config_hash = 2}),
+          b(add(1), {.local = 1, .peers = 2, .seed = 1, .config_hash = 2}) {}
+    Net::Transport& add(Net::PeerId) { return network.add_endpoint(); }
     void frame(int i) {
         const Replay::Command ca{.type = 1, .x = 5}, cb{.type = 2, .x = 3};
         for (auto [net, world, cmd] : {std::tuple<Net::Lockstep*, World*, const Replay::Command*>{&a, &wa, &ca}, {&b, &wb, &cb}}) {
@@ -54,23 +55,23 @@ struct Pair {
                 net->report_hashes(world->hashes());
             }
         }
-        network.step();
+        network.advance_by(1000);
     }
 };
 
 int main() {
     {
-        Pair pair({.latency_steps = 3, .jitter_steps = 4, .loss_permille = 200, .duplicate_permille = 100, .corrupt_permille = 50});
+        Pair pair({.latency_us = 3000, .jitter_us = 4000, .loss = 0.2, .duplicate = 0.1, .corrupt = 0.05});
         for (int i = 0; i < 1500; ++i) pair.frame(i);
         const auto& net = pair.network.stats();
         std::printf("плохая сеть: отправлено %llu, потеряно %llu, испорчено %llu; шагов %u/%u, пакетов отброшено контрольной суммой %llu\n",
-                    static_cast<unsigned long long>(net.sent), static_cast<unsigned long long>(net.lost), static_cast<unsigned long long>(net.corrupted),
+                    static_cast<unsigned long long>(net.sent), static_cast<unsigned long long>(net.dropped), static_cast<unsigned long long>(net.corrupted),
                     pair.wa.ticks, pair.wb.ticks, static_cast<unsigned long long>(pair.a.stats().bad_packets + pair.b.stats().bad_packets));
         EXPECT(pair.wa.ticks > 200 && pair.wb.ticks > 200);
         EXPECT(!pair.a.desync() && !pair.b.desync());
     }
     {
-        Pair pair({.latency_steps = 1});
+        Pair pair({.latency_us = 1000});
         for (int i = 0; i < 50; ++i) pair.frame(i);
         pair.wb.drift = 1; // у Боба начинается «недетерминизм»
         for (int i = 50; i < 200; ++i) pair.frame(i);

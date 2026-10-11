@@ -17,11 +17,27 @@ constexpr std::size_t max_partial_blobs = 16;
 
 Lockstep::Lockstep(Transport& transport, const LockstepConfig& config)
     : m_transport(transport), m_config(config),
-      m_inputs(config.peers), m_have(config.peers, config.input_delay), m_peer_acked(config.peers, config.input_delay),
-      m_hello_seen(config.peers, false) {
-    FLUX_ASSERT(config.peers >= 1 && config.local < config.peers, "Lockstep: локальный пир вне 0…peers-1");
+      m_inputs(config.peers), m_have(config.peers, config.input_delay),
+      m_peer_have(config.peers, std::vector<std::uint32_t>(config.peers, config.input_delay)),
+      m_is_neighbor(config.peers, false), m_hello_seen(config.peers, true), m_sent_have(config.peers) {
+    FLUX_ASSERT(config.peers >= 1 && config.peers <= max_peers && config.local < config.peers, "Lockstep: локальный пир вне 0…peers-1");
     FLUX_ASSERT(config.input_delay >= 1, "Lockstep: задержка ввода должна быть ≥ 1 тика");
-    m_hello_seen[config.local] = true;
+    FLUX_ASSERT(config.max_window >= 1, "Lockstep: окно тиков должно быть ≥ 1");
+    if (config.neighbors.empty()) {
+        for (PeerId p = 0; p < config.peers; ++p) {
+            if (p != config.local) m_neighbors.push_back(p);
+        }
+    } else {
+        for (const PeerId p : config.neighbors) {
+            FLUX_ASSERT(p < config.peers && p != config.local, "Lockstep: сосед вне 0…peers-1 или он сам");
+            if (!m_is_neighbor[p]) m_neighbors.push_back(p);
+            m_is_neighbor[p] = true;
+        }
+    }
+    for (const PeerId p : m_neighbors) {
+        m_is_neighbor[p] = true;
+        m_hello_seen[p] = false; // знакомство нужно только с соседями
+    }
     m_local_next = config.input_delay;
     // Первые input_delay тиков пусты у всех (никто ещё ничего не мог подать) — иначе игра не стартует.
     for (auto& per_peer : m_inputs) {
@@ -49,16 +65,23 @@ std::size_t Lockstep::submit(std::span<const Replay::Command> commands) {
     return accepted;
 }
 
+void Lockstep::make_outgoing(std::uint64_t hash, std::span<const std::byte> bytes, PeerId except) {
+    if (std::ranges::any_of(m_outgoing, [hash](const OutgoingBlob& b) { return b.hash == hash; })) return;
+    OutgoingBlob out{hash, std::vector<std::byte>(bytes.begin(), bytes.end()), std::vector<bool>(m_config.peers, true), std::vector<std::uint32_t>(m_config.peers, 0)};
+    bool any = false;
+    for (const PeerId n : m_neighbors) {
+        if (n == except) continue;
+        out.acked[index(n)] = false;
+        any = true;
+    }
+    if (any) m_outgoing.push_back(std::move(out));
+}
+
 std::uint64_t Lockstep::submit_blob(std::span<const std::byte> bytes) {
     FLUX_ASSERT(!bytes.empty() && bytes.size() <= max_blob_size, "Lockstep::submit_blob: размер блоба вне 1…64 КиБ");
     const std::uint64_t hash = Math::content_hash(bytes);
     if (m_blobs.size() < m_config.max_stored_blobs || m_blobs.contains(hash)) m_blobs.emplace(hash, std::vector<std::byte>(bytes.begin(), bytes.end()));
-    const bool known = std::ranges::any_of(m_outgoing, [hash](const OutgoingBlob& b) { return b.hash == hash; });
-    if (!known && m_config.peers > 1) {
-        OutgoingBlob out{hash, std::vector<std::byte>(bytes.begin(), bytes.end()), std::vector<bool>(m_config.peers, false), std::vector<std::uint32_t>(m_config.peers, 0)};
-        out.acked[index(m_config.local)] = true;
-        m_outgoing.push_back(std::move(out));
-    }
+    make_outgoing(hash, bytes, no_peer);
     return hash;
 }
 
@@ -79,12 +102,10 @@ std::span<const Replay::Command> Lockstep::advance() {
     FLUX_ASSERT(ready(), "Lockstep::advance: не готовы (проверяйте ready)");
     m_merged.clear();
     for (std::size_t p = 0; p < m_config.peers; ++p) {
-        auto& per_peer = m_inputs[p];
-        const auto it = per_peer.find(m_tick);
+        const auto it = m_inputs[p].find(m_tick);
         m_merged.insert(m_merged.end(), it->second.begin(), it->second.end());
-        if (p != index(m_config.local)) per_peer.erase(it); // свои держим до подтверждения всеми (для повторной отправки)
     }
-    ++m_tick;
+    ++m_tick; // исполненные тики убирает pump: свои и пересылаемые держатся до подтверждения соседями
     return m_merged;
 }
 
@@ -93,7 +114,7 @@ void Lockstep::pump() {
     Datagram d;
     while (m_transport.receive(d)) {
         auto packet = decode(d.bytes);
-        if (!packet || packet->from != d.from || packet->from >= m_config.peers || packet->from == m_config.local) {
+        if (!packet || packet->from != d.from || packet->from >= m_config.peers || packet->from == m_config.local || !m_is_neighbor[packet->from]) {
             ++m_stats.bad_packets;
             continue;
         }
@@ -101,48 +122,61 @@ void Lockstep::pump() {
         handle(*packet);
     }
 
-    // Свои тики держим, пока их не подтвердили все (иначе нечем лечить потери) и пока они не исполнены.
-    std::uint32_t floor = m_tick;
-    for (std::size_t p = 0; p < m_config.peers; ++p) {
-        if (p != index(m_config.local)) floor = std::min(floor, m_peer_acked[p]);
+    // Тики игрока держим, пока их не исполнили мы и пока не подтвердили все соседи, кому мы их шлём (иначе нечем лечить потери).
+    for (std::size_t j = 0; j < m_config.peers; ++j) {
+        std::uint32_t floor = m_tick;
+        if (j == index(m_config.local) || m_config.relay) {
+            for (const PeerId n : m_neighbors) {
+                if (index(n) != j) floor = std::min(floor, m_peer_have[index(n)][j]);
+            }
+        }
+        auto& per = m_inputs[j];
+        per.erase(per.begin(), per.lower_bound(floor));
     }
-    auto& mine = m_inputs[index(m_config.local)];
-    mine.erase(mine.begin(), mine.lower_bound(floor));
 
+    const bool periodic = m_pumps % m_config.resend_interval == 0;
     if (!connected() && m_failure.empty() && m_pumps % m_config.resend_interval == 1) send_hello();
     else if (m_pumps % hello_period == 0) send_hello();
     if (connected()) {
-        for (PeerId p = 0; p < m_config.peers; ++p) {
-            if (p != m_config.local) send_inputs(p);
-        }
+        for (const PeerId n : m_neighbors) send_inputs(n, periodic);
         send_blobs();
     }
     if (!ready()) ++m_stats.stalled_pumps;
 }
 
 void Lockstep::send_hello() {
-    for (PeerId p = 0; p < m_config.peers; ++p) {
-        if (p != m_config.local) send_packet(p, Hello{m_config.peers, m_config.seed, m_config.config_hash, m_hello_seen[index(p)]});
-    }
+    for (const PeerId p : m_neighbors) send_packet(p, Hello{m_config.peers, m_config.seed, m_config.config_hash, m_hello_seen[index(p)]});
 }
 
-void Lockstep::send_inputs(PeerId to) {
+void Lockstep::send_inputs(PeerId to, bool periodic) {
     Inputs msg;
-    msg.acked = m_have[index(to)];
-    const auto& mine = m_inputs[index(m_config.local)];
-    std::size_t size = 0;
-    for (auto it = mine.lower_bound(m_peer_acked[index(to)]); it != mine.end(); ++it) {
-        const std::size_t cost = 5 + it->second.size() * sizeof(Replay::Command);
-        if (size + cost > inputs_budget) break; // остальное уйдёт следующими пакетами, когда подтвердят начало
-        size += cost;
-        msg.ticks.push_back(TickInputs{it->first, it->second});
+    msg.have = m_have;
+    std::size_t size = 2 + 4 * m_have.size(); // счётчики и подтверждения
+    const std::size_t first = m_pumps % m_config.peers; // по кругу: ни один игрок не вытесняет остальных из пакета
+    for (std::size_t k = 0; k < m_config.peers; ++k) {
+        const std::size_t j = (first + k) % m_config.peers;
+        if (j == index(to)) continue;                                   // свои команды сосед знает сам
+        if (j != index(m_config.local) && !m_config.relay) continue;    // чужие — только при ретрансляции
+        PlayerTicks player{static_cast<PeerId>(j), {}};
+        size += 3;
+        const auto& per = m_inputs[j];
+        for (auto it = per.lower_bound(m_peer_have[index(to)][j]); it != per.end() && player.ticks.size() < m_config.max_window; ++it) {
+            const std::size_t cost = 5 + it->second.size() * sizeof(Replay::Command);
+            if (size + cost > inputs_budget) break; // остальное уйдёт следующими пакетами, когда подтвердят начало
+            size += cost;
+            player.ticks.push_back(TickInputs{it->first, it->second});
+        }
+        if (!player.ticks.empty()) msg.players.push_back(std::move(player));
+        else size -= 3;
     }
+    if (msg.players.empty() && !periodic && m_sent_have[index(to)] == m_have) return; // нечего сказать
+    m_sent_have[index(to)] = m_have;
     send_packet(to, std::move(msg));
 }
 
 void Lockstep::send_blobs() {
     for (OutgoingBlob& blob : m_outgoing) {
-        for (PeerId p = 0; p < m_config.peers; ++p) {
+        for (const PeerId p : m_neighbors) {
             if (blob.acked[index(p)]) continue;
             std::uint32_t& next = blob.next_offset[index(p)];
             for (std::size_t n = 0; n < m_config.max_blob_chunks_per_pump; ++n) {
@@ -169,12 +203,22 @@ void Lockstep::handle(const Packet& packet) {
             else m_hello_seen[from] = true;
             if (m_hello_seen[from] && !body.knows_you) send_packet(packet.from, Hello{m_config.peers, m_config.seed, m_config.config_hash, true}); // он нас ещё не видел: отвечаем (ответ сам ответа не вызывает)
         } else if constexpr (std::is_same_v<T, Inputs>) {
-            m_peer_acked[from] = std::max(m_peer_acked[from], std::min(body.acked, m_local_next));
-            for (const TickInputs& t : body.ticks) {
-                if (t.tick < m_have[from] || t.tick >= m_tick + input_window) continue; // старое или слишком далёкое
-                m_inputs[from].try_emplace(t.tick, t.commands);
+            const std::size_t local = index(m_config.local);
+            for (std::size_t j = 0; j < body.have.size() && j < m_config.peers; ++j) {
+                const std::uint32_t known = j == local ? m_local_next : m_have[j]; // больше того, что есть у нас, не верим
+                m_peer_have[from][j] = std::max(m_peer_have[from][j], std::min(body.have[j], known));
             }
-            while (m_inputs[from].contains(m_have[from])) ++m_have[from];
+            for (const PlayerTicks& player : body.players) {
+                if (player.player >= m_config.peers || index(player.player) == local) continue;
+                auto& per = m_inputs[index(player.player)];
+                std::uint32_t& have = m_have[index(player.player)];
+                for (const TickInputs& t : player.ticks) {
+                    if (t.tick < have || t.tick >= m_tick + input_window) continue; // старое или слишком далёкое
+                    const auto [it, inserted] = per.try_emplace(t.tick, t.commands);
+                    if (!inserted && it->second != t.commands) ++m_stats.input_conflicts;
+                }
+                while (per.contains(have)) ++have;
+            }
         } else if constexpr (std::is_same_v<T, BlobChunk>) {
             if (m_blobs.contains(body.hash)) { send_packet(packet.from, BlobAck{body.hash}); return; } // уже есть: подтверждение потерялось
             if (!m_partial.contains(body.hash)) {
@@ -189,9 +233,10 @@ void Lockstep::handle(const Packet& packet) {
             }
             if (part.received >= part.total) {
                 if (Math::content_hash(part.data) == body.hash) {
-                    m_blobs.emplace(body.hash, std::move(part.data));
+                    const auto stored = m_blobs.emplace(body.hash, std::move(part.data)).first;
                     ++m_stats.blobs_received;
                     send_packet(packet.from, BlobAck{body.hash});
+                    if (m_config.relay) make_outgoing(body.hash, stored->second, packet.from); // сервер звезды: остальным клиентам
                 } else {
                     ++m_stats.blobs_rejected; // содержимое не сошлось с хешем: отбрасываем, отправитель повторит с начала
                 }
@@ -212,8 +257,7 @@ void Lockstep::report_hashes(const Replay::StateHashes& hashes) {
     FLUX_ASSERT(m_tick > 0, "Lockstep::report_hashes: ещё не исполнено ни одного тика");
     const std::uint32_t tick = m_tick - 1;
     m_my_hashes[tick] = hashes;
-    for (PeerId p = 0; p < m_config.peers; ++p) {
-        if (p == m_config.local) continue;
+    for (const PeerId p : m_neighbors) {
         send_packet(p, HashReport{tick, hashes});
         if (const auto it = m_their_hashes.find({tick, p}); it != m_their_hashes.end()) {
             compare(tick, p, it->second);

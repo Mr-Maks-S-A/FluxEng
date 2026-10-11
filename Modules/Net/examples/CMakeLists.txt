@@ -2,6 +2,7 @@
 set(NET_EXAMPLES
     01_two_peers
     02_bad_network_and_desync
+    03_star_node
 )
 foreach(example IN LISTS NET_EXAMPLES)
     set(target NetExample_${example})

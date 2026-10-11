@@ -27,17 +27,21 @@ TEST_CASE("Hello, Inputs, BlobChunk, BlobAck, HashReport: туда-обратн�
     }
     {
         Inputs in;
-        in.acked = 41;
-        in.ticks.push_back({40, {cmd(1, 5), cmd(3, -9)}});
-        in.ticks.push_back({41, {}});
+        in.have = {41, 7, 0};
+        in.players.push_back({2, {{40, {cmd(1, 5), cmd(3, -9)}}, {41, {}}}});
+        in.players.push_back({0, {{9, {cmd(4, 1)}}}});
         const auto back = decode(encode(make(in)));
         REQUIRE(back.has_value());
         const auto& got = std::get<Inputs>(back->body);
-        CHECK(got.acked == 41);
-        REQUIRE(got.ticks.size() == 2);
-        CHECK(got.ticks[0].tick == 40);
-        CHECK(got.ticks[0].commands == in.ticks[0].commands);
-        CHECK(got.ticks[1].commands.empty());
+        CHECK(got.have == in.have);
+        REQUIRE(got.players.size() == 2);
+        CHECK(got.players[0].player == 2);
+        REQUIRE(got.players[0].ticks.size() == 2);
+        CHECK(got.players[0].ticks[0].tick == 40);
+        CHECK(got.players[0].ticks[0].commands == in.players[0].ticks[0].commands);
+        CHECK(got.players[0].ticks[1].commands.empty());
+        CHECK(got.players[1].player == 0);
+        CHECK(got.players[1].ticks[0].commands == in.players[1].ticks[0].commands);
     }
     {
         BlobChunk chunk{0x77, 3000, 1000, std::vector<std::byte>(1000, std::byte{0x5A})};
@@ -63,8 +67,8 @@ TEST_CASE("Hello, Inputs, BlobChunk, BlobAck, HashReport: туда-обратн�
 
 TEST_CASE("decode: любая порча одного бита ловится контрольной суммой") {
     Inputs in;
-    in.acked = 5;
-    in.ticks.push_back({5, {cmd(1, 1)}});
+    in.have = {5, 5};
+    in.players.push_back({1, {{5, {cmd(1, 1)}}}});
     const auto bytes = encode(make(in));
     for (std::size_t i = 0; i < bytes.size(); ++i) {
         auto bad = bytes;
@@ -89,15 +93,23 @@ TEST_CASE("decode: правдоподобный, но недопустимый �
     CHECK_FALSE(decode(encode(make(BlobChunk{1, 0, 0, {}}))).has_value());                              // размер 0
     CHECK_FALSE(decode(encode(make(BlobChunk{1, max_blob_size + 1, 0, std::vector<std::byte>(10)}))).has_value());
     Inputs many;
-    many.ticks.push_back({0, std::vector<Replay::Command>(max_commands_per_tick + 1)});
+    many.players.push_back({0, {{0, std::vector<Replay::Command>(max_commands_per_tick + 1)}}});
     CHECK_FALSE(decode(encode(make(many))).has_value());
+    Inputs crowd;
+    crowd.have.assign(max_peers + 1, 0);
+    CHECK_FALSE(decode(encode(make(crowd))).has_value());                                                // слишком много игроков
+    Inputs far;
+    far.players.push_back({static_cast<PeerId>(max_peers), {}});
+    CHECK_FALSE(decode(encode(make(far))).has_value());                                                  // игрок вне диапазона
     CHECK_FALSE(decode(encode(make(Hello{0, 0, 0, false}))).has_value());                                // ноль пиров
+    CHECK_FALSE(decode(encode(make(Hello{static_cast<std::uint8_t>(max_peers + 1), 0, 0, false}))).has_value());
 }
 
 TEST_CASE("фаззинг: случайные байты и случайные мутации валидных пакетов никогда не роняют разбор") {
     Math::Rng rng(2024);
     Inputs in;
-    in.ticks.push_back({1, {cmd(1, 2)}});
+    in.have = {1, 2};
+    in.players.push_back({0, {{1, {cmd(1, 2)}}}});
     const auto valid = encode(make(in));
     int accepted = 0;
     for (int i = 0; i < 5000; ++i) {

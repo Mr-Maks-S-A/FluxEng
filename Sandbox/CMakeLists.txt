@@ -176,12 +176,12 @@ if(BUILD_TESTING)
 endif()
 
 # ------------------------------------------------------------------------------
-# NetSim — без окна и GPU: узлы lockstep (звезда или mesh) на RuntimeSystem + NetSystem + ECS + JobSystem.
+# NetSim — без окна и GPU: узлы lockstep (звезда или mesh) на RuntimeSystem + Net + ECS + JobSystem.
 # Проверяет детерминизм по каждому тику при потерях, джиттере, дубликатах, дрейфе часов и разном числе потоков.
 # Тесты не требуют дисплея (метка без gpu).
 # ------------------------------------------------------------------------------
 add_executable(NetSim netsim/main.cpp)
-target_link_libraries(NetSim PRIVATE engine::RuntimeSystem engine::NetSystem engine::ECSSystem SandboxWarnings)
+target_link_libraries(NetSim PRIVATE engine::RuntimeSystem engine::Net engine::ECSSystem SandboxWarnings)
 
 if(BUILD_TESTING)
     set(NETSIM_COMMON --ticks 600)

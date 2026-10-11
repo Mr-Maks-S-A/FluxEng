@@ -17,7 +17,7 @@
 #   Core + все модули               [gpu] цикл App: порядок хуков, ввод (inject) → шина, память тика, скриншот
 #   RuntimeSystem + ECS + Jobs +          «выделенный сервер» без окна: порядок init по зависимостям, один результат
 #     EventSystem + MemorySystem          при 0, 1 и 4 потоках, shutdown при исключении
-#   InputSystem + NetSystem               ввод → действия → команда → lockstep: разные устройства и привязки, плохая сеть, реплей
+#   InputSystem + Net                      ввод → действия → команда → lockstep: разные устройства и привязки, плохая сеть, реплей
 #   Core + RuntimeSystem            [gpu] модули внутри клиента: configure → init → setup, обратное завершение, откат
 #
 # Запуск: ctest --test-dir build -L integration   (без GPU: -L integration -LE gpu)
@@ -35,7 +35,7 @@ add_executable(IntegrationTests
     integration/test_app_modules.cpp
     integration/test_input_lockstep.cpp
 )
-target_link_libraries(IntegrationTests PRIVATE engine::Core engine::InputSystem engine::NetSystem engine::RuntimeSystem engine::ECSSystem engine::Net engine::Challenge glfw glad CardDuelRules doctest::doctest)
+target_link_libraries(IntegrationTests PRIVATE engine::Core engine::InputSystem engine::RuntimeSystem engine::ECSSystem engine::Net engine::Challenge glfw glad CardDuelRules doctest::doctest)
 target_compile_features(IntegrationTests PRIVATE cxx_std_23)
 if(MSVC)
     target_compile_options(IntegrationTests PRIVATE /W4 /utf-8)

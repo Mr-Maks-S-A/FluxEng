@@ -1,4 +1,4 @@
-#include <Net/Lockstep.hpp>
+#include <Net/Net.hpp>
 
 #include <Math/Rng.hpp>
 
@@ -10,12 +10,14 @@ namespace {
 
 Net::Packet inputs_packet(int ticks, int commands_per_tick) {
     Net::Inputs in;
-    in.acked = 100;
+    in.have = {100, 100};
+    Net::PlayerTicks player{0, {}};
     for (int t = 0; t < ticks; ++t) {
         Net::TickInputs ti{static_cast<std::uint32_t>(100 + t), {}};
         for (int c = 0; c < commands_per_tick; ++c) ti.commands.push_back({.type = 1, .arg = 0, .x = c, .y = t, .z = 5});
-        in.ticks.push_back(std::move(ti));
+        player.ticks.push_back(std::move(ti));
     }
+    in.players.push_back(std::move(player));
     return Net::Packet{1, std::move(in)};
 }
 
@@ -46,7 +48,8 @@ BENCHMARK(BM_DecodeEmptyTicks);
 /// Кадр сети целиком (pump + submit + advance всех пиров + шаг сети), идеальная сеть: стоимость протокола на тик.
 static void BM_LockstepFrame(benchmark::State& state) {
     const auto peers = static_cast<std::size_t>(state.range(0));
-    Net::LoopbackNetwork network(peers, {.latency_steps = 1});
+    Net::SimulatedNetwork network(1, {.latency_us = 1000});
+    for (std::size_t i = 0; i < peers; ++i) network.add_endpoint();
     std::vector<std::unique_ptr<Net::Lockstep>> nodes;
     for (std::size_t i = 0; i < peers; ++i) {
         nodes.push_back(std::make_unique<Net::Lockstep>(network.endpoint(static_cast<Net::PeerId>(i)),
@@ -60,7 +63,7 @@ static void BM_LockstepFrame(benchmark::State& state) {
             if (n->needs_input()) n->submit(std::span(&cmd, 1));
             if (n->ready()) { benchmark::DoNotOptimize(n->advance()); ++steps; }
         }
-        network.step();
+        network.advance_by(1000);
     }
     state.counters["ticks/peer"] = benchmark::Counter(static_cast<double>(steps) / static_cast<double>(peers), benchmark::Counter::kAvgThreads);
 }
@@ -68,7 +71,8 @@ BENCHMARK(BM_LockstepFrame)->Arg(2)->Arg(4)->Arg(8);
 
 /// То же на плохой сети (потери 15 %, разброс): цена повторных отправок.
 static void BM_LockstepFrameLossy(benchmark::State& state) {
-    Net::LoopbackNetwork network(2, {.latency_steps = 2, .jitter_steps = 3, .loss_permille = 150}, 3);
+    Net::SimulatedNetwork network(3, {.latency_us = 2000, .jitter_us = 3000, .loss = 0.15});
+    network.add_endpoint(), network.add_endpoint();
     Net::Lockstep a(network.endpoint(0), {.local = 0, .peers = 2}), b(network.endpoint(1), {.local = 1, .peers = 2});
     const Replay::Command cmd{.type = 1, .x = 1};
     for (auto _ : state) {
@@ -77,10 +81,10 @@ static void BM_LockstepFrameLossy(benchmark::State& state) {
             if (n->needs_input()) n->submit(std::span(&cmd, 1));
             if (n->ready()) benchmark::DoNotOptimize(n->advance());
         }
-        network.step();
+        network.advance_by(1000);
     }
     state.counters["ticks"] = static_cast<double>(a.tick());
-    state.counters["KB sent"] = static_cast<double>(network.stats().bytes) / 1024.0;
+    state.counters["KB sent"] = static_cast<double>(network.stats().bytes_sent) / 1024.0;
 }
 BENCHMARK(BM_LockstepFrameLossy);
 
@@ -91,12 +95,13 @@ static void BM_BlobDelivery(benchmark::State& state) {
     for (auto& b : program) b = static_cast<std::byte>(rng.next_u32());
     std::uint64_t total_steps = 0;
     for (auto _ : state) {
-        Net::LoopbackNetwork network(2, {.latency_steps = 2, .loss_permille = 150}, total_steps + 1);
+        Net::SimulatedNetwork network(total_steps + 1, {.latency_us = 2000, .loss = 0.15});
+        network.add_endpoint(), network.add_endpoint();
         Net::Lockstep a(network.endpoint(0), {.local = 0, .peers = 2}), b(network.endpoint(1), {.local = 1, .peers = 2});
         const std::uint64_t hash = a.submit_blob(program);
         int steps = 0;
         while (!b.blob(hash) && steps < 1000) {
-            a.pump(); b.pump(); network.step();
+            a.pump(); b.pump(); network.advance_by(1000);
             ++steps;
         }
         total_steps += static_cast<std::uint64_t>(steps);

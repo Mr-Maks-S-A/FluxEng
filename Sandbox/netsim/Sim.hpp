@@ -13,6 +13,7 @@
 
 #include <ECSSystem/ECSSystem.hpp>
 #include <JobSystem/JobSystem.hpp>
+#include <Replay/Replay.hpp>
 #include <RuntimeSystem/RuntimeSystem.hpp>
 
 #include <algorithm>
@@ -34,6 +35,23 @@ struct Cmd {
     std::int16_t aim_y = 0;
 };
 static_assert(sizeof(Cmd) == 8 && std::has_unique_object_representations_v<Cmd>);
+
+/// Команда в виде, который несёт сеть (`Replay::Command`, 16 байт): движение и кнопки — в `arg`, прицел — в `x`, `y`.
+[[nodiscard]] inline Replay::Command to_command(const Cmd& c) noexcept {
+    const auto packed = static_cast<std::uint16_t>((static_cast<std::uint16_t>(c.move_x + 1) & 3u) | ((static_cast<std::uint16_t>(c.move_y + 1) & 3u) << 2) |
+                                                   (static_cast<std::uint16_t>(c.buttons) << 4));
+    return Replay::Command{.type = 1, .arg = static_cast<std::int16_t>(packed), .x = c.aim_x, .y = c.aim_y, .z = 0};
+}
+[[nodiscard]] inline Cmd from_command(const Replay::Command& c) noexcept {
+    const auto packed = static_cast<std::uint16_t>(c.arg);
+    Cmd out;
+    out.move_x = static_cast<std::int8_t>(static_cast<int>(packed & 3u) - 1);
+    out.move_y = static_cast<std::int8_t>(static_cast<int>((packed >> 2) & 3u) - 1);
+    out.buttons = static_cast<std::uint8_t>((packed >> 4) & 0xFFu);
+    out.aim_x = static_cast<std::int16_t>(c.x);
+    out.aim_y = static_cast<std::int16_t>(c.y);
+    return out;
+}
 
 inline constexpr std::int32_t kWorld = 256 * 256;     ///< Размер мира в 1/256 клетки (256×256 клеток).
 inline constexpr std::int32_t kMageSpeed = 384;       ///< За тик.

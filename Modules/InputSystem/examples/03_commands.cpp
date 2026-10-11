@@ -2,7 +2,7 @@
  * @file 03_commands.cpp
  * @brief Команда ввода за тик: клавиатура и геймпад дают одни и те же 16 байт — симуляции всё равно, откуда ввод.
  *
- * InputCommand можно отправить по сети (NetSystem::Lockstep), записать и воспроизвести. Симуляция читает только команду.
+ * InputCommand можно отправить по сети (через Net::Lockstep: 16 байт = одна `Replay::Command` или две, см. Tests/integration/test_input_lockstep.cpp), записать и воспроизвести. Симуляция читает только команду.
  */
 
 #include <InputSystem/InputSystem.hpp>

@@ -53,14 +53,16 @@ struct Peer {
 };
 
 struct Party {
-    std::unique_ptr<Net::LoopbackNetwork> network;
+    std::unique_ptr<Net::SimulatedNetwork> network;
     const Challenge::Level& level;
     const Challenge::Solution& solution;
     std::unique_ptr<Peer> pilot, scribe;
     bool scribe_wrote = false;
 
     Party(const char* level_id, const Net::LinkConfig& link, std::uint64_t seed)
-        : network(std::make_unique<Net::LoopbackNetwork>(2, link, seed)), level(*Challenge::find_level(level_id)), solution(*Challenge::reference_solution(level_id)) {
+        : network(std::make_unique<Net::SimulatedNetwork>(seed, link)), level(*Challenge::find_level(level_id)), solution(*Challenge::reference_solution(level_id)) {
+        network->add_endpoint();
+        network->add_endpoint();
         pilot = std::make_unique<Peer>(level, network->endpoint(0), 0);
         scribe = std::make_unique<Peer>(level, network->endpoint(1), 1);
     }
@@ -78,7 +80,7 @@ struct Party {
                 out.push_back(SpellSim::set_program_command(slot, scribe->net.submit_blob(Runes::encode_program(*program))));
             }
         });
-        network->step();
+        network->advance_by(1000);
     }
 
     /// Играет, пока оба мира не дойдут до тика `ticks` (дальше не шагают, но продолжают слать).
@@ -96,13 +98,13 @@ TEST_CASE("cpu: сетевая партия «пилот и писарь»: ми
     struct Case { const char* level; Net::LinkConfig link; std::uint32_t ticks; };
     const Case cases[] = {
         {"mound", {}, 120},
-        {"mound", {.latency_steps = 2, .jitter_steps = 3, .loss_permille = 150, .duplicate_permille = 50, .corrupt_permille = 20}, 120},
-        {"mound", {.latency_steps = 6, .jitter_steps = 8, .loss_permille = 300, .duplicate_permille = 150, .corrupt_permille = 80}, 120},
-        {"fort", {.latency_steps = 3, .jitter_steps = 4, .loss_permille = 200, .duplicate_permille = 100, .corrupt_permille = 50}, 500},
+        {"mound", {.latency_us = 2000, .jitter_us = 3000, .loss = 0.15, .duplicate = 0.05, .corrupt = 0.02}, 120},
+        {"mound", {.latency_us = 6000, .jitter_us = 8000, .loss = 0.3, .duplicate = 0.15, .corrupt = 0.08}, 120},
+        {"fort", {.latency_us = 3000, .jitter_us = 4000, .loss = 0.2, .duplicate = 0.1, .corrupt = 0.05}, 500},
     };
     for (const Case& c : cases) {
         CAPTURE(c.level);
-        CAPTURE(c.link.loss_permille);
+        CAPTURE(c.link.loss);
         Party party(c.level, c.link, 5);
         // Выполняется ровно `ticks` тиков у обоих — состояния сравнимы тик в тик.
         party.run_to(c.ticks);
@@ -117,7 +119,7 @@ TEST_CASE("cpu: сетевая партия «пилот и писарь»: ми
 }
 
 TEST_CASE("cpu: одна и та же партия в любой сети даёт один и тот же мир (сеть меняет время, а не результат)") {
-    Party ideal("mound", {}, 1), bad("mound", {.latency_steps = 4, .jitter_steps = 5, .loss_permille = 250}, 9);
+    Party ideal("mound", {}, 1), bad("mound", {.latency_us = 4000, .jitter_us = 5000, .loss = 0.25}, 9);
     ideal.run_to(100);
     bad.run_to(100);
     CHECK(ideal.pilot->sim.hashes() == bad.pilot->sim.hashes());
@@ -129,7 +131,7 @@ TEST_CASE("cpu: сетевую партию можно записать и во�
     Replay::CommandRegistry registry;
     SpellSim::register_commands(registry);
 
-    Party party("mound", {.latency_steps = 2, .jitter_steps = 3, .loss_permille = 150}, 3);
+    Party party("mound", {.latency_us = 2000, .jitter_us = 3000, .loss = 0.15}, 3);
     party.pilot->record = std::make_unique<Replay::Session>(Replay::Session::record(party.level.config.seed, path, &registry).value());
     party.run_to(150);
     REQUIRE(party.pilot->sim.tick_number() == 150);
@@ -155,7 +157,9 @@ TEST_CASE("cpu: сетевую партию можно записать и во�
 
 TEST_CASE("cpu: команда со ссылкой на блоб, которого нет, не исполняется: мир ждёт, а не делает что попало") {
     // Пир шлёт SetProgram с хешем, но блоб никто не присылал: оба мира останавливаются на тике команды.
-    Net::LoopbackNetwork network(2);
+    Net::SimulatedNetwork network;
+    network.add_endpoint();
+    network.add_endpoint();
     const Challenge::Level& level = *Challenge::find_level("mound");
     Peer a(level, network.endpoint(0), 0), b(level, network.endpoint(1), 1);
     const std::uint64_t fake_hash = 0xDEADBEEF;
@@ -163,7 +167,7 @@ TEST_CASE("cpu: команда со ссылкой на блоб, которог
     for (int i = 0; i < 100; ++i) {
         a.frame([&](const SpellSim::Simulation&, std::vector<Replay::Command>& out) { if (i == 5) out.push_back(set); });
         b.frame([](const SpellSim::Simulation&, std::vector<Replay::Command>&) {});
-        network.step();
+        network.advance_by(1000);
     }
     CHECK(a.sim.tick_number() < 20); // команда ждёт блоб, которого нет: мир стоит, а не исполняет что попало
     CHECK(a.sim.programs_set() == 0);

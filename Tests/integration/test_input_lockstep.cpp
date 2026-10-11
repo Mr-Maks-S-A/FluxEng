@@ -1,32 +1,54 @@
 /**
  * @file test_input_lockstep.cpp
- * @brief InputSystem + NetSystem: от нажатия клавиши до одной и той же симуляции на всех узлах.
+ * @brief InputSystem + Net: от нажатия клавиши до одной и той же симуляции на всех узлах.
  *
  * Три игрока на разных устройствах и с разными привязками (клавиатура WASD, клавиатура со стрелками, переназначенная из
  * текста настроек, и геймпад) играют через плохую сеть. Путь: события платформы → InputState → ActionMap → InputCommand →
- * NetSystem::Lockstep → симуляция. Проверяется, что
+ * Net::Lockstep → симуляция. Проверяется, что
  *  - разные устройства дают одинаковые команды для одного и того же намерения;
  *  - все узлы приходят к побитово одной симуляции на каждом тике, как при воспроизведении без сети;
  *  - запись ввода (InputLog), сделанная «на клавиатуре», воспроизводится в те же команды.
  */
 
 #include <InputSystem/InputSystem.hpp>
-#include <NetSystem/NetSystem.hpp>
+#include <Net/Net.hpp>
 
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
 
 using namespace InputSystem;
-namespace ns = NetSystem;
+namespace ns = Net;
 
 namespace {
 
 constexpr std::uint32_t kInputDelay = 4;
+
+/// Сеть возит `Replay::Command` (16 байт). Команда ввода игрока — тоже 16 байт, но с другой раскладкой, поэтому на тик
+/// уходят две сетевые команды: кнопки с осями 0–4 и ось 5. Игрок подаёт ровно две, значит игрок k — команды 2k и 2k+1.
+std::array<Replay::Command, 2> pack(const InputCommand& c) {
+    const auto lo = [](std::int16_t a, std::int16_t b) { return static_cast<std::int32_t>(static_cast<std::uint32_t>(static_cast<std::uint16_t>(a)) | (static_cast<std::uint32_t>(static_cast<std::uint16_t>(b)) << 16)); };
+    return {Replay::Command{.type = 1, .arg = c.axes[0], .x = static_cast<std::int32_t>(c.buttons), .y = lo(c.axes[1], c.axes[2]), .z = lo(c.axes[3], c.axes[4])},
+            Replay::Command{.type = 2, .arg = c.axes[5]}};
+}
+
+InputCommand unpack(const Replay::Command& a, const Replay::Command& b) {
+    InputCommand c;
+    const auto half = [](std::int32_t v, int i) { return static_cast<std::int16_t>(static_cast<std::uint32_t>(v) >> (16 * i)); };
+    c.buttons = static_cast<std::uint32_t>(a.x);
+    c.axes[0] = a.arg;
+    c.axes[1] = half(a.y, 0);
+    c.axes[2] = half(a.y, 1);
+    c.axes[3] = half(a.z, 0);
+    c.axes[4] = half(a.z, 1);
+    c.axes[5] = b.arg;
+    return c;
+}
 
 /// Раскладка команды: одинакова у всех узлов и зашита в игру.
 CommandLayout layout() {
@@ -125,25 +147,37 @@ struct World {
     ns::SimulatedNetwork net;
     std::vector<Device> devices;
     std::vector<Sim> sims;
-    std::vector<std::unique_ptr<ns::LockstepNode<InputCommand>>> nodes;
+    std::vector<std::unique_ptr<ns::Node>> nodes;
 
     explicit World(ns::LinkConfig link, std::uint64_t seed) : net(seed, link), devices(3), sims(3) {
-        std::vector<ns::ITransport*> transports;
-        for (int i = 0; i < 3; ++i) transports.push_back(&net.add_endpoint());
+        for (int i = 0; i < 3; ++i) net.add_endpoint();
         for (int i = 0; i < 3; ++i) {
             devices[static_cast<std::size_t>(i)].player = static_cast<ns::PeerId>(i);
             devices[static_cast<std::size_t>(i)].actions = actions_for(static_cast<ns::PeerId>(i));
-            ns::LockstepNodeConfig config;
-            config.lockstep.self = static_cast<ns::PeerId>(i);
+            ns::NodeConfig config;
+            config.lockstep.local = static_cast<ns::PeerId>(i);
+            config.lockstep.peers = 3;
             config.lockstep.input_delay = kInputDelay;
-            config.lockstep.players = {0, 1, 2};
-            config.lockstep.neighbors = i == 0 ? std::vector<ns::PeerId>{1, 2} : std::vector<ns::PeerId>{0};
+            if (i != 0) config.lockstep.neighbors = {0}; // звезда: клиенты знают только сервер
             config.lockstep.relay = i == 0;
             Device* device = &devices[static_cast<std::size_t>(i)];
             Sim* sim = &sims[static_cast<std::size_t>(i)];
-            nodes.push_back(std::make_unique<ns::LockstepNode<InputCommand>>(
-                *transports[static_cast<std::size_t>(i)], config, [device](ns::PeerId, std::uint32_t tick) { return device->sample(tick); },
-                [sim](std::span<const InputCommand> in, std::uint32_t tick) { sim->step(in, tick); }, [sim] { return sim->hash; }));
+            nodes.push_back(std::make_unique<ns::Node>(
+                net.endpoint(static_cast<ns::PeerId>(i)), config,
+                [device](ns::PeerId, std::uint32_t tick, std::vector<Replay::Command>& out) {
+                    const auto packed = pack(device->sample(tick));
+                    out.insert(out.end(), packed.begin(), packed.end());
+                },
+                [sim](std::span<const Replay::Command> commands, std::uint32_t tick) {
+                    InputCommand inputs[3]; // первые kInputDelay тиков идут без команд: «никто ничего не делает»
+                    for (std::size_t p = 0; p < 3 && 2 * p + 1 < commands.size(); ++p) inputs[p] = unpack(commands[2 * p], commands[2 * p + 1]);
+                    sim->step(inputs, tick);
+                },
+                [sim] {
+                    Replay::StateHashes h;
+                    h.add("sim", sim->hash);
+                    return h;
+                }));
         }
     }
 
@@ -176,7 +210,7 @@ std::vector<std::uint64_t> reference(std::uint32_t ticks, Sim& out) {
 
 } // namespace
 
-TEST_SUITE("InputSystem + NetSystem") {
+TEST_SUITE("InputSystem + Net") {
 
 TEST_CASE("cpu: разные устройства и привязки — одни команды на то же намерение") {
     // Игрок 0 (клавиатура WASD) и игрок 2 (стрелки, переназначено текстом) делают одно и то же в одни кадры.
@@ -226,7 +260,7 @@ TEST_CASE("cpu: плохая сеть — все узлы повторяют э�
             CHECK(std::equal(history.begin(), history.begin() + static_cast<std::ptrdiff_t>(n), expected.begin()));
         }
         for (const auto& node : world.nodes) {
-            CHECK(node->session().stats().desyncs == 0);
+            CHECK_FALSE(node->session().desync().has_value());
             CHECK(node->session().stats().input_conflicts == 0);
         }
     }

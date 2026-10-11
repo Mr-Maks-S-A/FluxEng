@@ -256,7 +256,9 @@ private:
             return same && verdict && verdict->match;
         });
         add("Net", [](Core::App&, std::string& d) {
-            Net::LoopbackNetwork network(2, {.latency_steps = 2, .jitter_steps = 2, .loss_permille = 200, .duplicate_permille = 80}, 4);
+            Net::SimulatedNetwork network(4, {.latency_us = 2000, .jitter_us = 2000, .loss = 0.2, .duplicate = 0.08});
+            network.add_endpoint();
+            network.add_endpoint();
             Net::Lockstep a(network.endpoint(0), {.local = 0, .peers = 2, .seed = 1}), b(network.endpoint(1), {.local = 1, .peers = 2, .seed = 1});
             std::int64_t sum_a = 0, sum_b = 0;
             std::uint32_t ticks_a = 0, ticks_b = 0;
@@ -272,7 +274,7 @@ private:
                         ++*ticks;
                     }
                 }
-                network.step();
+                network.advance_by(1000);
             }
             d = std::format("2 пира, потери 20 %: сумма ввода {} = {} на тике {}", sum_a, sum_b, ticks_a);
             return ticks_a == 100 && ticks_b == 100 && sum_a == sum_b && sum_a > 0;
