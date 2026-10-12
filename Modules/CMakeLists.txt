@@ -9,6 +9,7 @@ add_subdirectory( EventSystem )
 add_subdirectory( RuntimeSystem )    # ядро без графики: тик, модули, шина, задачи, память
 add_subdirectory( InputSystem )      # ввод: собственные коды, состояние, ActionMap, команда ввода, запись
 add_subdirectory( AssetSystem )      # ассеты: VFS, пак, PNG/JPG, glTF, менеджер с кешем и фоновой загрузкой
+add_subdirectory( AudioSystem )      # звук: WAV/OGG, микшер, шины, 3D, реверберация, ducking, звуковые события
 add_subdirectory( WindowSystem )
 add_subdirectory( ECSSystem )
 add_subdirectory( RendererSystem )
@@ -35,7 +36,8 @@ add_subdirectory( Core )           # слой приложения: зависи
 #   engine::Foundation    Math, MemorySystem, JobSystem, Phases      числа, память, потоки, расписание тика
 #   engine::Simulation    Foundation + EventSystem, ECSSystem,       детерминированное ядро: события, сущности,
 #                         Replay, EventLog, Net                      запись/повтор, журнал с избыточностью, сеть lockstep
-#   engine::Platform      WindowSystem, RendererSystem, Core         окно, графика, каркас приложения
+#   engine::Platform      WindowSystem, RendererSystem, Core,        окно, графика, каркас приложения, звук
+#                         AudioSystem
 #   engine::Gameplay      Simulation + Terrain, ManaField, Runes,    правила мира заклинаний
 #                         RuneEditor, Character, SpellSim, Challenge
 #   engine::Presentation  Platform + WorldRender (+ адаптеры),        отрисовка мира и редактора рун
@@ -52,7 +54,7 @@ target_link_libraries(FluxSimulation INTERFACE engine::Foundation engine::EventS
 
 add_library(FluxPlatform INTERFACE)
 add_library(engine::Platform ALIAS FluxPlatform)
-target_link_libraries(FluxPlatform INTERFACE engine::WindowSystem engine::RendererSystem engine::Core)
+target_link_libraries(FluxPlatform INTERFACE engine::WindowSystem engine::RendererSystem engine::AudioSystem engine::Core)
 
 add_library(FluxGameplay INTERFACE)
 add_library(engine::Gameplay ALIAS FluxGameplay)
