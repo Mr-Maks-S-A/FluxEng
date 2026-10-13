@@ -42,6 +42,7 @@ void put_command(Out& o, const Replay::Command& c) {
     o.u32(static_cast<std::uint32_t>(c.x));
     o.u32(static_cast<std::uint32_t>(c.y));
     o.u32(static_cast<std::uint32_t>(c.z));
+    o.u16(c.player);
 }
 Replay::Command get_command(In& in) {
     Replay::Command c;
@@ -50,6 +51,7 @@ Replay::Command get_command(In& in) {
     c.x = static_cast<std::int32_t>(in.u32());
     c.y = static_cast<std::int32_t>(in.u32());
     c.z = static_cast<std::int32_t>(in.u32());
+    c.player = in.u16();
     return c;
 }
 
@@ -155,7 +157,7 @@ std::expected<Packet, std::string> decode(std::span<const std::byte> bytes) {
                 t.tick = in.u32();
                 const std::uint8_t n = in.u8();
                 if (n > max_commands_per_tick) return fail("Inputs: слишком много команд в тике");
-                if (in.left() < static_cast<std::size_t>(n) * sizeof(Replay::Command)) return fail("Inputs: пакет обрезан");
+                if (in.left() < static_cast<std::size_t>(n) * wire_command_size) return fail("Inputs: пакет обрезан");
                 for (std::uint8_t k = 0; k < n; ++k) t.commands.push_back(get_command(in));
                 p.ticks.push_back(std::move(t));
             }

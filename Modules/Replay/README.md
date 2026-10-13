@@ -41,7 +41,7 @@ Replay::StateHashes hashes() const { Replay::StateHashes h; h.add("terrain", ...
 
 | Тип | Роль |
 |---|---|
-| `Command` | 16 байт: `type`, `arg`, `x`, `y`, `z`; смысл полей — в схеме игры |
+| `Command` | `type`, `arg`, `x`, `y`, `z` и `player` (номер игрока; 0 — единственный или первый); смысл полей — в схеме игры. В записи игрок 0 — 16 байт, как раньше |
 | `StateHashes`, `NamedHash` | хеши подсистем по именам; `differing`, `describe` |
 | `CommandRegistry`, `CommandSchema` | имена команд и полей; `format(command)` → «move dx=1 dz=0» |
 | `Recording`, `LoadInfo` | сид, команды, трейлер с хешами, схемы; `load`, `load_with_info`, `save`, `repair_file` |
@@ -53,7 +53,7 @@ Replay::StateHashes hashes() const { Replay::StateHashes h; h.add("terrain", ...
 
 ## Блобы — большое рядом с командами
 
-Команда — 16 байт и не вмещает граф или программу. Большое кладётся в запись **блобом по хешу содержимого**, а команда ссылается на хеш:
+Команда — несколько байт и не вмещает граф или программу. Большое кладётся в запись **блобом по хешу содержимого**, а команда ссылается на хеш:
 
 ```cpp
 const std::uint64_t hash = driver.submit_blob(program_bytes);                // до тика: блоб в запись и в симуляцию

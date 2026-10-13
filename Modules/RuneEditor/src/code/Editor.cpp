@@ -102,12 +102,13 @@ OpResult Editor::execute(const Op& op) {
     GraphNode* n = m_graph.find(op.node);
     switch (op.kind) {
     case K::AddNode:
-        if (op.rune >= Rune::Count || op.rune == Rune::Dup || op.rune == Rune::Drop) return {};
+        if (op.rune >= Rune::Count || op.rune == Rune::Dup || op.rune == Rune::Drop || !Runes::graph_expressible(op.rune)) return {};
         break;
     case K::RemoveNode: case K::MoveNode: case K::SetValue: case K::SetEntry:
         if (!n) return {};
         if (op.kind == K::SetEntry && !Runes::is_statement(n->rune)) return {};
-        if (op.kind == K::SetValue && n->rune != Rune::Push) return {};
+        if (op.kind == K::SetValue && n->rune != Rune::Push && n->rune != Rune::Load && n->rune != Rune::Store) return {};
+        if (op.kind == K::SetValue && n->rune != Rune::Push && (op.value < 0 || op.value >= Runes::variable_count)) return {};
         break;
     case K::SetInput: {
         if (!n || op.slot < 0 || op.slot >= input_count(*n)) return {};

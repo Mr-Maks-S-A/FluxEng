@@ -60,7 +60,8 @@ namespace {
 /// Ширины входов (в ячейках) по рунам; пусто — входов нет.
 std::vector<int> widths_table(Rune r) {
     switch (r) {
-    case Rune::Add: case Rune::Mul: return {1, 1};
+    case Rune::Add: case Rune::Mul: case Rune::Sub: case Rune::Lt: return {1, 1};
+    case Rune::Store: return {1};
     case Rune::ManaAt: return {3};
     case Rune::Carve: case Rune::Raise: return {3, 1};
     case Rune::Draw: return {3, 1, 1};
@@ -104,6 +105,10 @@ struct Compiler {
         if (n.rune == Rune::Dup || n.rune == Rune::Drop || n.rune == Rune::Count) {
             return fail(id, Code::StackRune, std::string(rune_name(n.rune)));
         }
+        if (!graph_expressible(n.rune)) return fail(id, Code::NotInGraph, std::string(rune_name(n.rune)));
+        if ((n.rune == Rune::Store || n.rune == Rune::Load) && (n.value < 0 || n.value >= variable_count)) {
+            return fail(id, Code::BadVariable, std::to_string(n.value));
+        }
         const std::vector<int> widths = input_widths(n.rune);
         if (n.inputs.size() != widths.size()) {
             return fail(id, Code::WrongInputCount, std::string(rune_name(n.rune)) + ": нужно входов " + std::to_string(widths.size()) + ", подключено " + std::to_string(n.inputs.size()));
@@ -126,7 +131,7 @@ struct Compiler {
         const GraphNode& n = *graph.find(id);
         for (const NodeId in : n.inputs) emit_expression(in);
         current = id;
-        emit(n.rune, n.rune == Rune::Push ? n.value : 0);
+        emit(n.rune, n.rune == Rune::Push || n.rune == Rune::Load ? n.value : 0);
     }
 
     void jump_to(NodeId target) { // безусловный переход: «PUSH 1; JMP_IF цель»
@@ -146,6 +151,7 @@ struct Compiler {
             while (cur != no_node && !emitted.contains(cur) && !error) {
                 const GraphNode* n = graph.find(cur);
                 if (!n) return fail(cur, Code::MissingNode);
+                if (!graph_expressible(n->rune)) return fail(cur, Code::NotInGraph, std::string(rune_name(n->rune)));
                 if (!is_statement(n->rune)) return fail(cur, Code::ValueInControlFlow, std::string(rune_name(n->rune)));
                 check_inputs(cur, *n);
                 if (error) return;
@@ -155,7 +161,7 @@ struct Compiler {
                 last_id = cur;
                 for (const NodeId in : n->inputs) emit_expression(in);
                 current = cur;
-                emit(n->rune);
+                emit(n->rune, n->rune == Rune::Store ? n->value : 0);
                 if (n->rune == Rune::Draw) emit(Rune::Drop); // результат DRAW в графе не используется
                 if (n->rune == Rune::Halt) break;
                 if (n->rune == Rune::JmpIf) {
@@ -257,7 +263,17 @@ std::expected<Graph, Diagnostic> decompile(const Program& program) {
                 if (!pop_value(1)) return err(pc, Code::BadStackShape, "DROP снимает не число");
                 break;
             }
-            case Rune::Add: case Rune::Mul: {
+            case Rune::Jmp: case Rune::Call: case Rune::Ret: return err(pc, Code::NotInGraph, std::string(rune_name(r)));
+            case Rune::Load: stack.push_back({g.add(Rune::Load, in.operand), 0}); break;
+            case Rune::Store: {
+                const auto v = pop_value(1);
+                if (!v) return err(pc, Code::BadStackShape, "STORE: нужно число");
+                const NodeId id = g.add(Rune::Store, in.operand);
+                g.set_input(id, 0, *v);
+                block.statements.push_back(id);
+                break;
+            }
+            case Rune::Add: case Rune::Mul: case Rune::Sub: case Rune::Lt: {
                 const auto b = pop_value(1), a = pop_value(1);
                 if (!a || !b) return err(pc, Code::BadStackShape, "нужны два числа");
                 const NodeId id = g.add(r);
@@ -359,6 +375,7 @@ std::string serialize(const Graph& graph) {
             if (parse_fixed(text).value_or(0) == n.value) out << " value " << text;
             else out << " raw " << n.value; // точная запись для чисел без короткого десятичного вида
         }
+        if (n.rune == Rune::Load || n.rune == Rune::Store) out << " raw " << n.value; // слот переменной
         if (!n.inputs.empty()) {
             out << " in";
             for (const NodeId in : n.inputs) out << ' ' << in;

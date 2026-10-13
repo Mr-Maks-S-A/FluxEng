@@ -29,7 +29,9 @@ TEST_CASE("Hello, Inputs, BlobChunk, BlobAck, HashReport: туда-обратн�
         Inputs in;
         in.have = {41, 7, 0};
         in.players.push_back({2, {{40, {cmd(1, 5), cmd(3, -9)}}, {41, {}}}});
-        in.players.push_back({0, {{9, {cmd(4, 1)}}}});
+        Replay::Command with_player = cmd(4, 1);
+        with_player.player = 7;
+        in.players.push_back({0, {{9, {with_player}}}});
         const auto back = decode(encode(make(in)));
         REQUIRE(back.has_value());
         const auto& got = std::get<Inputs>(back->body);
@@ -42,6 +44,7 @@ TEST_CASE("Hello, Inputs, BlobChunk, BlobAck, HashReport: туда-обратн�
         CHECK(got.players[0].ticks[1].commands.empty());
         CHECK(got.players[1].player == 0);
         CHECK(got.players[1].ticks[0].commands == in.players[1].ticks[0].commands);
+        CHECK(got.players[1].ticks[0].commands[0].player == 7);
     }
     {
         BlobChunk chunk{0x77, 3000, 1000, std::vector<std::byte>(1000, std::byte{0x5A})};

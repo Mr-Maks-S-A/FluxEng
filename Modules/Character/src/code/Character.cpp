@@ -48,6 +48,34 @@ bool resolve(const Math::SdfField& terrain, const Collider& collider, const Conf
     return support;
 }
 
+/// Капсулы не проходят друг сквозь друга: пары ближе суммы радиусов расталкиваются по горизонтали поровну.
+/// Порядок пар — по id сущностей, поэтому результат одинаков у всех. Один персонаж — пары нет, ничего не меняется.
+void separate(ECS::World& world) {
+    const auto entities = world.entities_of<Position>();
+    if (entities.size() < 2) return;
+    for (std::size_t i = 0; i < entities.size(); ++i) {
+        for (std::size_t j = i + 1; j < entities.size(); ++j) {
+            Position& a = *world.get<Position>(entities[i]);
+            Position& b = *world.get<Position>(entities[j]);
+            const Collider& ca = *world.get<Collider>(entities[i]);
+            const Collider& cb = *world.get<Collider>(entities[j]);
+            const std::int64_t top_a = a.value.y + ca.heights[static_cast<std::size_t>(ca.count - 1)].raw + ca.radius.raw;
+            const std::int64_t top_b = b.value.y + cb.heights[static_cast<std::size_t>(cb.count - 1)].raw + cb.radius.raw;
+            if (a.value.y >= top_b || b.value.y >= top_a) continue; // один над другим
+            const FVec3 d{Fixed::from_raw(static_cast<std::int32_t>(b.value.x - a.value.x)), Fixed{}, Fixed::from_raw(static_cast<std::int32_t>(b.value.z - a.value.z))};
+            const Fixed need = ca.radius + cb.radius;
+            const Fixed dist = Math::length(d);
+            if (dist >= need) continue;
+            const Fixed half = (need - dist) / Fixed::from_int(2);
+            // Единичная нормаль; совпали — расходятся вдоль X.
+            const FVec3 n = dist.raw > 0 ? FVec3{d.x / dist, Fixed{}, d.z / dist} : FVec3{Fixed::from_int(1), Fixed{}, Fixed{}};
+            const std::int64_t dx = (n.x * half).raw, dz = (n.z * half).raw;
+            a.value.x -= dx, a.value.z -= dz;
+            b.value.x += dx, b.value.z += dz;
+        }
+    }
+}
+
 } // namespace
 
 void step(ECS::World& world, const Math::SdfField& terrain, const Config& config) {
@@ -98,6 +126,7 @@ void step(ECS::World& world, const Math::SdfField& terrain, const Config& config
         }
         motor.grounded = support && velocity.value.y.raw <= 0;
     }
+    separate(world);
 }
 
 void hash_characters(const ECS::World& world, Math::Hasher& hasher) {

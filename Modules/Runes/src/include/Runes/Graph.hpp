@@ -75,7 +75,7 @@ private:
 };
 
 [[nodiscard]] constexpr bool is_statement(Rune r) noexcept {
-    return r == Rune::Carve || r == Rune::Raise || r == Rune::Draw || r == Rune::JmpIf || r == Rune::Halt;
+    return r == Rune::Carve || r == Rune::Raise || r == Rune::Draw || r == Rune::JmpIf || r == Rune::Halt || r == Rune::Store;
 }
 /// @brief Ширина значения выражения в ячейках стека: 3 у векторов (CASTER, AIM, TARGET), иначе 1.
 [[nodiscard]] constexpr int value_width(Rune r) noexcept { return r == Rune::Caster || r == Rune::Aim || r == Rune::Target ? 3 : 1; }

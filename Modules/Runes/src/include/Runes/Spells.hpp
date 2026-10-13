@@ -38,6 +38,7 @@ namespace Runes {
 
 constexpr std::size_t stack_depth = 64;
 constexpr std::size_t max_runes_per_tick = 256;
+constexpr std::size_t call_depth = 8; ///< Вложенных CALL.
 
 /// @brief Константы стоимости; меняются в одном месте.
 struct Tuning {
@@ -64,7 +65,7 @@ struct CostEstimate {
 /// @brief Оценивает стоимость программы по `Tuning`: константы протаскиваются через PUSH/ADD/MUL, чтобы знать радиус эффекта.
 [[nodiscard]] CostEstimate estimate_cost(const Program& program, const Tuning& tuning = {});
 
-enum class Failure : std::uint8_t { None, StackUnderflow, StackOverflow, JumpOutOfRange, OutOfMana, OutOfBudget, UnknownRune };
+enum class Failure : std::uint8_t { None, StackUnderflow, StackOverflow, JumpOutOfRange, OutOfMana, OutOfBudget, UnknownRune, CallOverflow, BadVariable };
 [[nodiscard]] std::string_view failure_text(Failure failure) noexcept;
 
 enum class Status : std::uint8_t { Running, Halted, Failed };
@@ -112,6 +113,9 @@ struct SpellProgram {
 struct MachineState {
     std::array<Math::Fixed, stack_depth> stack{};
     std::uint32_t sp = 0;
+    std::array<Math::Fixed, static_cast<std::size_t>(variable_count)> vars{}; ///< STORE/LOAD.
+    std::array<std::uint32_t, call_depth> calls{};                          ///< Адреса возврата CALL.
+    std::uint32_t csp = 0;                                                   ///< Глубина вызовов.
     std::uint32_t pc = 0;
     std::uint32_t runes_executed = 0;
     Status status = Status::Running;

@@ -16,6 +16,7 @@ flux_module(Terrain)
 flux_module(ManaField)
 flux_module(Runes)
 flux_module(Character)
+flux_module(Progress)
 flux_module(EventSystem)
 flux_module(ECSSystem)
 
@@ -37,7 +38,7 @@ target_include_directories(SpellSim PUBLIC
 )
 target_compile_features(SpellSim PUBLIC cxx_std_23)
 target_link_libraries(SpellSim
-    PUBLIC  engine::Math engine::Phases engine::Replay engine::Terrain engine::ManaField engine::Runes engine::Character engine::EventSystem engine::ECSSystem
+    PUBLIC  engine::Math engine::Phases engine::Replay engine::Terrain engine::ManaField engine::Runes engine::Character engine::Progress engine::EventSystem engine::ECSSystem
     PRIVATE $<BUILD_INTERFACE:SpellSimOptions>
 )
 

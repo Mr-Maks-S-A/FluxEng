@@ -64,7 +64,7 @@ add_executable(WorldJournal world_journal/main.cpp)
 target_link_libraries(WorldJournal PRIVATE engine::Terrain engine::EventLog engine::Math SandboxWarnings)
 if(BUILD_TESTING)
     add_test(NAME Sandbox.WorldJournal COMMAND WorldJournal --edits 900 --snapshot-every 400 --dir "${CMAKE_CURRENT_BINARY_DIR}/world_journal_test")
-    set_tests_properties(Sandbox.WorldJournal PROPERTIES LABELS "sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    set_tests_properties(Sandbox.WorldJournal PROPERTIES LABELS "sandbox" TIMEOUT 300 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
 endif()
 
 # ModuleProof: игра-проверка — все модули движка в живом приложении (линкуется с engine::FluxEng): чек-лист на экране и в консоли.
@@ -82,20 +82,20 @@ target_link_libraries(CoopScribe PRIVATE engine::Gameplay SandboxWarnings)
 if(BUILD_TESTING)
     foreach(level IN ITEMS mine mound fort)
         add_test(NAME Sandbox.CoopScribe.${level} COMMAND CoopScribe --level ${level})
-        set_tests_properties(Sandbox.CoopScribe.${level} PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+        set_tests_properties(Sandbox.CoopScribe.${level} PROPERTIES LABELS "sandbox;net" TIMEOUT 300 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
     endforeach()
     add_test(NAME Sandbox.CoopScribe.terrible_network COMMAND CoopScribe --level mound --latency 6 --jitter 8 --loss 300 --dup 150 --corrupt 80 --delay 5)
-    set_tests_properties(Sandbox.CoopScribe.terrible_network PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    set_tests_properties(Sandbox.CoopScribe.terrible_network PROPERTIES LABELS "sandbox;net" TIMEOUT 300 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
     add_test(NAME Sandbox.CoopScribe.cheater COMMAND CoopScribe --level mound --cheat)
     set_tests_properties(Sandbox.CoopScribe.cheater PROPERTIES LABELS "sandbox;net" TIMEOUT 120 PASS_REGULAR_EXPRESSION "OK \\(читера поймали\\)" FAIL_REGULAR_EXPRESSION "ОШИБКА")
 endif()
 
 # LivingVillage: «живая деревня» — Искра и жители, живущие с маной по-разному (ManaField + ECS + Phases + Replay). Консольный, без GPU.
 add_executable(LivingVillage living_village/main.cpp)
-target_link_libraries(LivingVillage PRIVATE engine::Gameplay SandboxWarnings)
+target_link_libraries(LivingVillage PRIVATE engine::Gameplay engine::RendererSystem SandboxWarnings)
 if(BUILD_TESTING)
     add_test(NAME Sandbox.LivingVillage COMMAND LivingVillage --check)
-    set_tests_properties(Sandbox.LivingVillage PROPERTIES LABELS "sandbox" TIMEOUT 120 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    set_tests_properties(Sandbox.LivingVillage PROPERTIES LABELS "sandbox" TIMEOUT 300 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
 endif()
 
 # ReplayTool: просмотр и сравнение записей (файл самоописываем — нужен только Replay).

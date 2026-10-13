@@ -60,7 +60,8 @@ void call_chunk(Fn& fn, std::size_t begin, std::size_t end, std::size_t chunk) {
  * @param grain     Элементов в куске. Кусок должен быть «весомым» (десятки микросекунд работы),
  *                  иначе накладные расходы съедят выигрыш.
  * @param body      `body(begin, end)` или `body(begin, end, chunk)`.
- * @throws Первое исключение из `body` (остальные куски при этом всё равно выполняются).
+ * @throws Первое исключение из `body`. После исключения не все куски выполнены: начатые доделываются, остальные могут
+ *         не запуститься (поток, бросивший исключение, больше кусков не берёт). Не рассчитывайте на частичный результат.
  */
 template<typename Fn>
 void parallel_for(Scheduler& scheduler, std::size_t count, std::size_t grain, Fn&& body) {

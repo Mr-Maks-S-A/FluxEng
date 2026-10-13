@@ -43,7 +43,8 @@ std::expected<Program, Diagnostic> decode_program(std::span<const std::byte> byt
         if (rune >= static_cast<std::uint32_t>(Rune::Count)) return fail(Code::UnknownRune, std::to_string(rune));
         const auto r = static_cast<Rune>(rune);
         if (!has_operand(r) && operand != 0) return fail(Code::UnexpectedOperand, std::string(rune_name(r)));
-        if (r == Rune::JmpIf && (operand < 0 || static_cast<std::size_t>(operand) >= count)) return fail(Code::JumpOutOfRange, std::to_string(operand));
+        if (is_jump(r) && (operand < 0 || static_cast<std::size_t>(operand) >= count)) return fail(Code::JumpOutOfRange, std::to_string(operand));
+        if ((r == Rune::Store || r == Rune::Load) && (operand < 0 || operand >= variable_count)) return fail(Code::BadVariable, std::to_string(operand));
         program.code.push_back({r, operand});
     }
     return program;

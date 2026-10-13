@@ -94,6 +94,29 @@ TEST_CASE("Recording: команды по тикам и файл туда-обр
     std::filesystem::remove(path);
 }
 
+TEST_CASE("Recording: номер игрока переживает файл; команда игрока 0 по-прежнему 16 байт, текст помечает игрока") {
+    Recording r;
+    r.seed = 5;
+    r.tick_count = 4;
+    r.final_hashes = H(1, 2, 3);
+    r.add(1, {.type = 1, .arg = 2, .x = 3, .y = 4, .z = 5});            // игрок 0
+    r.add(1, {.type = 1, .arg = 2, .x = 3, .y = 4, .z = 5, .player = 3}); // та же команда от игрока 3
+    const std::string path = temp_file("flux_replay_player.bin");
+    REQUIRE(r.save(path).has_value());
+    auto loaded = Recording::load(path);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->at(1).size() == 2);
+    CHECK(loaded->at(1)[0].player == 0);
+    CHECK(loaded->at(1)[1].player == 3);
+    CHECK(*loaded == r);
+    std::filesystem::remove(path);
+
+    const CommandRegistry registry = game_registry();
+    CHECK(registry.format({.type = 2}) == "jump");
+    CHECK(registry.format({.type = 2, .player = 1}) == "p1 jump");
+    CHECK(Command{.type = 2}.with_player(4).player == 4);
+}
+
 TEST_CASE("Recording: чужой файл, пустой и обрезанный дают ошибку") {
     CHECK_FALSE(Recording::load("/nonexistent/flux").has_value());
     const std::string path = temp_file("flux_replay_bad.bin");

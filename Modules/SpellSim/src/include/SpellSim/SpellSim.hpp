@@ -6,7 +6,7 @@
  * Симуляция владеет миром (ландшафт, поле маны, ECS с персонажем и заклинаниями, генератор с сидом) и шагает
  * 60 раз в секунду. Порядок внутри тика фиксирован:
  *
- * 1. применить команды игрока (Move, Jump, Cast);
+ * 1. применить команды игроков (Move, Jump, Cast, SetProgram) в порядке следования; игрок выбирается `Command::player`;
  * 2. выполнить активные заклинания в порядке id сущностей;
  * 3. применить правки ландшафта (заклинания только ставят их в очередь);
  * 4. шагнуть поле маны (каждый шестой тик — 10 раз в секунду);
@@ -17,12 +17,13 @@
  * фазой (`schedule().insert_after("movement", "machines", fn)`), замеры по фазам собираются расписанием.
  *
  * Только целые и Fixed. Мир меняется только командами: запись `Replay::Session` (сид + команды) однозначно
- * восстанавливает прогон, `hashes()` — именованные контрольные суммы подсистем: terrain, mana, characters, spells, rng, tick.
+ * восстанавливает прогон, `hashes()` — именованные контрольные суммы подсистем: terrain, mana, characters, spells, rng, tick (и mastery при `use_ranks`).
  */
 
 #include <Character/Character.hpp>
 #include <Math/Math.hpp>
 #include <Phases/Schedule.hpp>
+#include <Progress/Progress.hpp>
 #include <ManaField/ManaField.hpp>
 #include <Replay/Replay.hpp>
 #include <Runes/Runes.hpp>
@@ -80,6 +81,7 @@ struct CastCommand {
 struct SetProgramCommand {
     int slot = 0;
     std::uint64_t hash = 0;
+    int target = -1; ///< Чей гримуар: номер игрока; -1 — отправителя. Так писарь правит гримуар пилота.
     [[nodiscard]] Replay::Command encode() const noexcept;
     [[nodiscard]] static SetProgramCommand decode(const Replay::Command& c) noexcept;
 };
@@ -98,7 +100,7 @@ void register_commands(Replay::CommandRegistry& registry);
     return SetProgramCommand::decode(c).hash;
 }
 
-[[nodiscard]] inline Replay::Command set_program_command(int slot, std::uint64_t hash) noexcept { return SetProgramCommand{slot, hash}.encode(); }
+[[nodiscard]] inline Replay::Command set_program_command(int slot, std::uint64_t hash, int target = -1) noexcept { return SetProgramCommand{slot, hash, target}.encode(); }
 
 // ---- События ----
 
@@ -128,6 +130,9 @@ struct Config {
     std::vector<SetupEdit> setup;                 ///< Применяются по порядку при создании мира.
     std::int32_t spawn_offset_x_m = 0;            ///< Сдвиг точки появления от центра мира, метры.
     std::int32_t spawn_offset_z_m = 0;
+    bool use_ranks = false;                       ///< Включает путь чародея (`Progress`): закрытые руны не запускаются, эффекты дают опыт.
+    std::uint16_t player_count = 1;               ///< Сколько игроков (магов) в мире; команда выбирает мага по `Command::player`.
+    std::int32_t player_spacing_m = 2;            ///< Расстояние между точками появления игроков вдоль X, метры (игрок 0 — в точке появления).
     std::size_t max_custom_programs = 64;         ///< Сколько различных программ можно подать через `provide_program` (защита от переполнения).
     ManaField::Config mana{};
     Runes::Tuning runes{};
@@ -173,7 +178,18 @@ public:
     [[nodiscard]] const Terrain::SdfWorld& terrain() const noexcept { return m_terrain; }
     [[nodiscard]] const ManaField::ManaGrid& mana() const noexcept { return m_mana; }
     [[nodiscard]] const ECS::World& world() const noexcept { return m_world; }
-    [[nodiscard]] ECS::Entity player() const noexcept { return m_player; }
+    /// @brief Первый игрок (одиночная игра). Для остальных — `players()` / `player(index)`.
+    [[nodiscard]] ECS::Entity player() const noexcept { return m_players.front(); }
+    [[nodiscard]] ECS::Entity player(std::size_t index) const noexcept { return m_players[index]; }
+    [[nodiscard]] std::span<const ECS::Entity> players() const noexcept { return m_players; }
+    /// @brief Команды, адресованные несуществующему игроку (отброшены одинаково у всех).
+    [[nodiscard]] std::uint32_t unknown_player_commands() const noexcept { return m_unknown_player_commands; }
+    /// @brief Путь игрока (опыт и ранг); без `Config::use_ranks` опыт не копится.
+    [[nodiscard]] const Progress::Mastery& mastery(std::size_t player = 0) const noexcept { return m_mastery[player]; }
+    [[nodiscard]] const Progress::RankTable& ranks() const noexcept { return m_ranks; }
+    /// @brief Касты, отклонённые из-за закрытой руны (отказ одинаков у всех, симуляция не расходится).
+    [[nodiscard]] std::uint32_t locked_casts() const noexcept { return m_locked_casts; }
+    [[nodiscard]] std::uint32_t rank_ups() const noexcept { return m_rank_ups; }
     [[nodiscard]] const Runes::SpellSystem& spells() const noexcept { return m_spells; }
     [[nodiscard]] Runes::ProgramLibrary& programs() noexcept { return m_programs; }
     [[nodiscard]] const Runes::ProgramLibrary& programs() const noexcept { return m_programs; }
@@ -182,7 +198,7 @@ public:
     /// @brief Чанки ландшафта, чьи сетки нужно перестроить (фаза 6); очередь очищается. Забирает отрисовка после тика.
     [[nodiscard]] std::vector<Terrain::ChunkCoord> take_dirty_chunks() { return m_terrain.take_dirty(); }
     /// @brief Ставит заклинание в слот гримуара по имени из библиотеки (до начала прогона; в записи это часть настройки, не команда).
-    void set_grimoire_slot(int slot, std::string name);
+    void set_grimoire_slot(int slot, std::string name, std::size_t player = 0);
 
     /// @brief Расписание фаз: порядок, замеры (`times()`), точка подключения новых фаз.
     [[nodiscard]] Phases::Schedule& schedule() noexcept { return m_schedule; }
@@ -205,12 +221,16 @@ private:
     void phase_mana();
     void phase_movement();
     void phase_events();
+    void award_experience(ECS::Entity caster, std::uint32_t xp);
 
     Config m_config;
     Terrain::SdfWorld m_terrain;
     ManaField::ManaGrid m_mana;
     ECS::World m_world;
-    ECS::Entity m_player;
+    std::vector<ECS::Entity> m_players;
+    std::vector<Progress::Mastery> m_mastery; ///< По игрокам (копится только при `use_ranks`).
+    Progress::RankTable m_ranks = Progress::RankTable::default_table();
+    std::uint32_t m_locked_casts = 0, m_rank_ups = 0;
     Runes::SpellSystem m_spells;
     Runes::ProgramLibrary m_programs;
     Math::Rng m_rng;
@@ -219,7 +239,7 @@ private:
     EventSystem::EventWriter<TerrainEditedEvent> m_terrain_edited;
     bool m_declared = false;
     std::uint32_t m_tick = 0;
-    std::uint32_t m_casts = 0, m_failed_casts = 0, m_edits_applied = 0, m_programs_set = 0, m_rejected_programs = 0;
+    std::uint32_t m_casts = 0, m_failed_casts = 0, m_edits_applied = 0, m_programs_set = 0, m_rejected_programs = 0, m_unknown_player_commands = 0;
     std::size_t m_custom_programs = 0;
     Phases::Schedule m_schedule;
     std::span<const Replay::Command> m_commands; ///< Команды тика, пока идёт `tick()`.

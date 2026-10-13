@@ -1,4 +1,4 @@
-#include <Net/Lockstep.hpp>
+#include <Net/Driver.hpp>
 
 #include <Math/Hash.hpp>
 #include <Math/Rng.hpp>
@@ -18,10 +18,14 @@ struct Toy {
     std::int64_t sum = 0;
     std::uint32_t ticks = 0;
     std::int64_t poison = 0; ///< Для теста расхождения: «недетерминизм» одного пира.
+    std::uint32_t player_mask = 0; ///< Какие номера игроков встретились в командах Add.
 
     void tick(std::span<const Replay::Command> commands, const Lockstep& net) {
         for (const Replay::Command& c : commands) {
-            if (c.type == Add) sum += c.x * static_cast<std::int64_t>(ticks + 1);
+            if (c.type == Add) {
+                sum += c.x * static_cast<std::int64_t>(ticks + 1);
+                player_mask |= 1u << c.player;
+            }
             else if (c.type == UseBlob) {
                 const std::uint64_t hash = static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.x)) | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.y)) << 32);
                 const auto* blob = net.blob(hash);
@@ -248,4 +252,76 @@ TEST_CASE("чужие и испорченные датаграммы не лом
     net.advance_by(1000);
     a.pump();
     CHECK(a.stats().bad_packets == 2);
+}
+
+TEST_CASE("номер игрока в команде — номер пира-отправителя; выдать чужую команду за свою нельзя") {
+    Party party(3, {.latency_us = 1000}, 5);
+    // Пир 2 пытается подписаться чужим номером: Lockstep всё равно проставит его собственный.
+    party.injected[2].push_back({.type = Add, .x = 1, .player = 0});
+    party.run_to(100);
+    for (const Toy& sim : party.sims) CHECK(sim.player_mask == 0b111u); // у всех видны игроки 0, 1 и 2, и только они
+}
+
+namespace {
+
+/// Симуляция для `LockstepDriver`: считает команды и принимает блобы (как `SpellSim` — программы).
+struct DriverSim {
+    std::uint32_t ticks = 0;
+    std::int64_t commands = 0;
+    std::vector<std::vector<std::byte>> provided;
+    void tick(std::span<const Replay::Command> c) {
+        commands += static_cast<std::int64_t>(c.size());
+        ++ticks;
+    }
+    [[nodiscard]] std::uint32_t tick_number() const noexcept { return ticks; }
+    [[nodiscard]] Replay::StateHashes hashes() const {
+        Math::Hasher h;
+        h.add_signed(commands);
+        h.add(ticks);
+        Replay::StateHashes out;
+        out.add("sim", h.value());
+        return out;
+    }
+    void provide_blob(std::span<const std::byte> bytes) { provided.emplace_back(bytes.begin(), bytes.end()); }
+};
+
+} // namespace
+
+TEST_CASE("LockstepDriver: кадр = pump, ввод, шаг, хеши; блоб отдан симуляции один раз и раньше команды; предел тиков") {
+    SimulatedNetwork net(3, {.latency_us = 1000, .jitter_us = 1000, .loss = 0.1});
+    net.add_endpoint();
+    net.add_endpoint();
+    Lockstep a(net.endpoint(0), {.local = 0, .peers = 2, .seed = 9, .config_hash = 1});
+    Lockstep b(net.endpoint(1), {.local = 1, .peers = 2, .seed = 9, .config_hash = 1});
+    a.set_blob_reference(blob_ref);
+    b.set_blob_reference(blob_ref);
+    DriverSim sa, sb;
+    LockstepDriver<DriverSim> da(sa, a), db(sb, b);
+    da.set_tick_limit(120);
+    db.set_tick_limit(120);
+
+    const std::vector<std::byte> program(300, std::byte{7});
+    const std::uint64_t hash = a.submit_blob(program);
+    bool sent = false;
+    for (int frame = 0; frame < 20000 && (sa.ticks < 120 || sb.ticks < 120); ++frame) {
+        da.frame([&](std::vector<Replay::Command>& mine) {
+            if (!sent) { // команда со ссылкой на блоб (одна) и обычные
+                sent = true;
+                mine.push_back({.type = UseBlob, .x = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash)), .y = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash >> 32))});
+            }
+            mine.push_back({.type = Add, .x = 1});
+        });
+        db.frame([](std::vector<Replay::Command>& mine) { mine.push_back({.type = Add, .x = 2}); });
+        net.advance_by(1000);
+    }
+    CHECK(sa.ticks == 120);
+    CHECK(sb.ticks == 120);
+    CHECK(sa.hashes() == sb.hashes());
+    CHECK(sa.commands == sb.commands);
+    CHECK(da.executed_ticks() == 120);
+    REQUIRE(sa.provided.size() == 1); // ровно один раз, хотя команд со ссылкой могло быть больше
+    CHECK(sa.provided[0] == program);
+    REQUIRE(sb.provided.size() == 1);
+    CHECK(sb.provided[0] == program);
+    CHECK_FALSE(a.desync().has_value());
 }

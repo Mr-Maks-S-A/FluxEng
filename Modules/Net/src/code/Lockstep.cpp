@@ -19,7 +19,7 @@ Lockstep::Lockstep(Transport& transport, const LockstepConfig& config)
     : m_transport(transport), m_config(config),
       m_inputs(config.peers), m_have(config.peers, config.input_delay),
       m_peer_have(config.peers, std::vector<std::uint32_t>(config.peers, config.input_delay)),
-      m_is_neighbor(config.peers, false), m_hello_seen(config.peers, true), m_sent_have(config.peers) {
+      m_is_neighbor(config.peers, false), m_hello_seen(config.peers, true), m_sent_have(config.peers), m_last_heard(config.peers, 0) {
     FLUX_ASSERT(config.peers >= 1 && config.peers <= max_peers && config.local < config.peers, "Lockstep: локальный пир вне 0…peers-1");
     FLUX_ASSERT(config.input_delay >= 1, "Lockstep: задержка ввода должна быть ≥ 1 тика");
     FLUX_ASSERT(config.max_window >= 1, "Lockstep: окно тиков должно быть ≥ 1");
@@ -98,12 +98,28 @@ bool Lockstep::ready() const {
     return true;
 }
 
+std::uint32_t Lockstep::pumps_since_heard(PeerId peer) const noexcept {
+    if (peer >= m_config.peers || peer == m_config.local || !m_is_neighbor[peer]) return 0;
+    return m_pumps - m_last_heard[index(peer)];
+}
+
+std::vector<PeerId> Lockstep::silent_peers(std::uint32_t threshold_pumps) const {
+    std::vector<PeerId> out;
+    for (PeerId p = 0; p < m_config.peers; ++p) {
+        if (pumps_since_heard(p) > threshold_pumps) out.push_back(p);
+    }
+    return out;
+}
+
 std::span<const Replay::Command> Lockstep::advance() {
     FLUX_ASSERT(ready(), "Lockstep::advance: не готовы (проверяйте ready)");
     m_merged.clear();
     for (std::size_t p = 0; p < m_config.peers; ++p) {
         const auto it = m_inputs[p].find(m_tick);
+        const std::size_t first = m_merged.size();
         m_merged.insert(m_merged.end(), it->second.begin(), it->second.end());
+        // Номер игрока — номер пира, приславшего команду: чужую команду за свою не выдать.
+        for (std::size_t i = first; i < m_merged.size(); ++i) m_merged[i].player = static_cast<std::uint16_t>(p);
     }
     ++m_tick; // исполненные тики убирает pump: свои и пересылаемые держатся до подтверждения соседями
     return m_merged;
@@ -119,6 +135,7 @@ void Lockstep::pump() {
             continue;
         }
         ++m_stats.packets_received;
+        m_last_heard[index(packet->from)] = m_pumps;
         handle(*packet);
     }
 
@@ -161,7 +178,7 @@ void Lockstep::send_inputs(PeerId to, bool periodic) {
         size += 3;
         const auto& per = m_inputs[j];
         for (auto it = per.lower_bound(m_peer_have[index(to)][j]); it != per.end() && player.ticks.size() < m_config.max_window; ++it) {
-            const std::size_t cost = 5 + it->second.size() * sizeof(Replay::Command);
+            const std::size_t cost = 5 + it->second.size() * wire_command_size;
             if (size + cost > inputs_budget) break; // остальное уйдёт следующими пакетами, когда подтвердят начало
             size += cost;
             player.ticks.push_back(TickInputs{it->first, it->second});

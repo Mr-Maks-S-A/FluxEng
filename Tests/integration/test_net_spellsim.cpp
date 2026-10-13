@@ -8,7 +8,7 @@
  */
 
 #include <Challenge/Play.hpp>
-#include <Net/Lockstep.hpp>
+#include <Net/Driver.hpp>
 
 #include <doctest/doctest.h>
 
@@ -17,38 +17,28 @@
 
 namespace {
 
+/// В партии два игрока — по магу на каждого; писарь правит гримуар пилота (игрок 0).
+SpellSim::Config party_config(SpellSim::Config config) {
+    config.player_count = 2;
+    return config;
+}
+
 /// Участник партии: мир, сетевой узел и (по желанию) запись объединённого ввода.
 struct Peer {
     Peer(const Challenge::Level& level, Net::Transport& transport, Net::PeerId id)
-        : sim(level.config), net(transport, {.local = id, .peers = 2, .seed = level.config.seed, .config_hash = Challenge::level_hash(level), .input_delay = 3}) {
+        : sim(party_config(level.config)), net(transport, {.local = id, .peers = 2, .seed = level.config.seed, .config_hash = Challenge::level_hash(level), .input_delay = 3}) {
         Challenge::install_library(level, sim);
         net.set_blob_reference(SpellSim::blob_reference);
     }
     SpellSim::Simulation sim;
     Net::Lockstep net;
     std::unique_ptr<Replay::Session> record; ///< Запись партии с точки зрения этого пира.
-    std::uint32_t cap = ~0u; ///< Не шагать дальше этого тика (но продолжать слать и принимать).
 
-    /// Один кадр. `mine` — ввод этого пира на тик, который сейчас подаётся.
+    Net::LockstepDriver<SpellSim::Simulation> driver{sim, net};
+
+    /// Один кадр. `input` — ввод этого пира на тик, который сейчас подаётся.
     void frame(const std::function<void(const SpellSim::Simulation&, std::vector<Replay::Command>&)>& input) {
-        net.pump();
-        if (net.needs_input()) {
-            std::vector<Replay::Command> mine;
-            input(sim, mine);
-            net.submit(mine);
-        }
-        if (sim.tick_number() >= cap || !net.ready()) return;
-        const auto span = net.advance();
-        const std::vector<Replay::Command> commands(span.begin(), span.end());
-        for (const Replay::Command& c : commands) {
-            const auto hash = SpellSim::blob_reference(c);
-            if (!hash) continue;
-            if (!sim.has_program(*hash)) (void)sim.provide_program(*net.blob(*hash));
-            if (record) (void)record->add_blob(sim.tick_number(), *net.blob(*hash)); // блоб — в запись раньше команды
-        }
-        const std::span<const Replay::Command> applied = record ? record->begin_tick(sim.tick_number(), commands) : std::span<const Replay::Command>(commands);
-        sim.tick(applied);
-        net.report_hashes(sim.hashes());
+        driver.frame([&](std::vector<Replay::Command>& mine) { input(sim, mine); });
     }
 };
 
@@ -77,7 +67,7 @@ struct Party {
             for (const auto& [slot, text] : solution.programs) {
                 const auto program = Runes::parse_program(text);
                 REQUIRE(program.has_value());
-                out.push_back(SpellSim::set_program_command(slot, scribe->net.submit_blob(Runes::encode_program(*program))));
+                out.push_back(SpellSim::set_program_command(slot, scribe->net.submit_blob(Runes::encode_program(*program)), 0));
             }
         });
         network->advance_by(1000);
@@ -85,7 +75,8 @@ struct Party {
 
     /// Играет, пока оба мира не дойдут до тика `ticks` (дальше не шагают, но продолжают слать).
     void run_to(std::uint32_t ticks) {
-        pilot->cap = scribe->cap = ticks;
+        pilot->driver.set_tick_limit(ticks);
+        scribe->driver.set_tick_limit(ticks);
         for (int i = 0; i < 200000 && !(pilot->sim.tick_number() >= ticks && scribe->sim.tick_number() >= ticks); ++i) {
             frame();
         }
@@ -133,17 +124,19 @@ TEST_CASE("cpu: сетевую партию можно записать и во�
 
     Party party("mound", {.latency_us = 2000, .jitter_us = 3000, .loss = 0.15}, 3);
     party.pilot->record = std::make_unique<Replay::Session>(Replay::Session::record(party.level.config.seed, path, &registry).value());
+    party.pilot->driver.set_record(party.pilot->record.get());
     party.run_to(150);
     REQUIRE(party.pilot->sim.tick_number() == 150);
     const Replay::StateHashes live = party.pilot->sim.hashes();
     REQUIRE(party.pilot->record->finish(150, live).has_value());
+    party.pilot->driver.set_record(nullptr);
     party.pilot->record.reset();
 
     auto loaded = Replay::Recording::load(path);
     REQUIRE(loaded.has_value());
     CHECK(loaded->blobs.size() == 1); // программа писаря
 
-    SpellSim::Simulation replayed(party.level.config);
+    SpellSim::Simulation replayed(party_config(party.level.config));
     Challenge::install_library(party.level, replayed);
     auto session = Replay::Session::replay(*loaded);
     Replay::Driver driver(replayed, session);

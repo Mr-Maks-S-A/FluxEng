@@ -30,6 +30,7 @@ enum class Code : std::uint8_t {
     JumpOutOfRange,    ///< Цель JMP_IF вне программы.
     ProgramTooLong,    ///< detail: число рун (если известно).
     ProgramEmpty,
+    BadVariable,       ///< Слот STORE/LOAD вне 0…7; detail: текст операнда.
     // граф: компиляция
     NoEntry,
     MissingNode,       ///< Ссылка на несуществующий узел.
@@ -54,6 +55,7 @@ enum class Code : std::uint8_t {
     // предупреждения анализа графа (редактор): граф компилируется, но узел бесполезен
     UnreachableNode,   ///< Оператор недостижим от entry.
     UnusedValue,       ///< Значение никто не использует.
+    NotInGraph,        ///< Руна есть только в тексте (JMP, CALL, RET): графом не выражается; detail: руна.
 };
 
 /// @brief Стабильное имя кода (для логов и сериализации), например «unknown_rune».

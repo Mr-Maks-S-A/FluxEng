@@ -18,7 +18,7 @@
  * auto verdict = driver.finish().value();                 // запись → трейлер с хешами; повтор → сверка по подсистемам
  * @endcode
  *
- * Модуль не знает, что значат команды: тип и три числа — на совести игры (схемы — `CommandRegistry`).
+ * Модуль не знает, что значат команды: тип, аргумент и три числа — на совести игры (схемы — `CommandRegistry`).
  */
 
 #include <EventLog/Journal.hpp>
@@ -37,14 +37,24 @@
 
 namespace Replay {
 
-/// @brief Команда игрока: тип (по таблице игры), малый аргумент и три числа (Fixed.raw направления и т.п.).
+/**
+ * @brief Команда игрока: тип (по таблице игры), малый аргумент, три числа (Fixed.raw направления и т.п.) и номер игрока.
+ *
+ * `player` — номер игрока в партии (0 — единственный или первый). Стоит последним, чтобы позиционная инициализация
+ * `{type, arg, x, y, z}` продолжала работать. В сетевой игре его проставляет `Net::Lockstep` по номеру пира-отправителя
+ * (клиент не может выдать чужую команду за свою). В файле записи команда игрока 0 занимает 16 байт, как раньше;
+ * с ненулевым игроком — 18: старые записи и эталоны читаются без изменений.
+ */
 struct Command {
     std::uint16_t type = 0;
     std::int16_t arg = 0;
     std::int32_t x = 0, y = 0, z = 0;
+    std::uint16_t player = 0;
+    /// @brief Та же команда от указанного игрока: `SpellSim::jump_command().with_player(1)`.
+    [[nodiscard]] constexpr Command with_player(std::uint16_t who) const noexcept { Command c = *this; c.player = who; return c; }
     [[nodiscard]] friend constexpr bool operator==(const Command&, const Command&) noexcept = default;
 };
-static_assert(sizeof(Command) == 16);
+static_assert(sizeof(Command) == 20);
 
 /// @brief Хеш одной подсистемы: имя (до 15 символов) и значение.
 /// @brief Хеш содержимого (FNV-1a, 64 бита): имя блоба. Не криптографический — защита от случайных ошибок, а не от злоумышленника.

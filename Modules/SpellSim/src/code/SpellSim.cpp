@@ -3,6 +3,8 @@
 #include <Math/Hash.hpp>
 #include <Runes/Wire.hpp>
 
+#include <algorithm>
+
 namespace SpellSim {
 
 using Math::Fixed;
@@ -28,10 +30,10 @@ CastCommand CastCommand::decode(const Replay::Command& c) noexcept {
 
 Replay::Command SetProgramCommand::encode() const noexcept {
     return {.type = static_cast<std::uint16_t>(CommandType::SetProgram), .arg = static_cast<std::int16_t>(slot),
-            .x = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash)), .y = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash >> 32)), .z = 0};
+            .x = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash)), .y = static_cast<std::int32_t>(static_cast<std::uint32_t>(hash >> 32)), .z = target + 1};
 }
 SetProgramCommand SetProgramCommand::decode(const Replay::Command& c) noexcept {
-    return {c.arg, static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.x)) | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.y)) << 32)};
+    return {c.arg, static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.x)) | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.y)) << 32), c.z - 1};
 }
 
 void register_commands(Replay::CommandRegistry& registry) {
@@ -40,7 +42,7 @@ void register_commands(Replay::CommandRegistry& registry) {
     registry.add({static_cast<std::uint16_t>(CommandType::Move), "move", {Field{}, Field{"dx", fx}, Field{}, Field{"dz", fx}}})
         .add({static_cast<std::uint16_t>(CommandType::Jump), "jump", {}})
         .add({static_cast<std::uint16_t>(CommandType::Cast), "cast", {Field{"slot_source", Field::Kind::Int}, Field{"aim_x", fx}, Field{"aim_y", fx}, Field{"aim_z", fx}}})
-        .add({static_cast<std::uint16_t>(CommandType::SetProgram), "set_program", {Field{"slot", Field::Kind::Int}, Field{"hash_lo", Field::Kind::Int}, Field{"hash_hi", Field::Kind::Int}, Field{}}});
+        .add({static_cast<std::uint16_t>(CommandType::SetProgram), "set_program", {Field{"slot", Field::Kind::Int}, Field{"hash_lo", Field::Kind::Int}, Field{"hash_hi", Field::Kind::Int}, Field{"target", Field::Kind::Int}}});
 }
 
 /// Мир глазами заклинаний: чувства и кошелёк. Эффекты на ландшафт руны возвращают данными (`EffectBuffer`), фаза 3 их применяет.
@@ -82,8 +84,13 @@ Simulation::Simulation(const Config& config)
     grimoire.slots = config.grimoire;
     const std::int64_t cx = m_terrain.layout().size_x() / 2 + static_cast<std::int64_t>(config.spawn_offset_x_m) * Fixed::one_raw;
     const std::int64_t cz = m_terrain.layout().size_z() / 2 + static_cast<std::int64_t>(config.spawn_offset_z_m) * Fixed::one_raw;
-    const WorldPos feet{cx, m_terrain.ground_height(cx, cz) + Fixed::from_ratio(1, 2).raw, cz};
-    m_player = Character::spawn(m_world, feet, {config.player_mana, config.player_mana, config.player_mana_regen}, grimoire);
+    const std::uint16_t count = std::max<std::uint16_t>(config.player_count, 1);
+    for (std::uint16_t i = 0; i < count; ++i) {
+        const std::int64_t px = cx + static_cast<std::int64_t>(config.player_spacing_m) * i * Fixed::one_raw;
+        const WorldPos feet{px, m_terrain.ground_height(px, cz) + Fixed::from_ratio(1, 2).raw, cz};
+        m_players.push_back(Character::spawn(m_world, feet, {config.player_mana, config.player_mana, config.player_mana_regen}, grimoire));
+    }
+    m_mastery.assign(m_players.size(), Progress::Mastery{});
 }
 
 void Simulation::declare(EventSystem::EventBus& bus) {
@@ -94,9 +101,9 @@ void Simulation::declare(EventSystem::EventBus& bus) {
     m_declared = true;
 }
 
-void Simulation::set_grimoire_slot(int slot, std::string name) {
-    if (slot < 0 || slot >= Character::Grimoire::slot_count) return;
-    m_world.get<Character::Grimoire>(m_player)->slots[static_cast<std::size_t>(slot)] = std::move(name);
+void Simulation::set_grimoire_slot(int slot, std::string name, std::size_t player) {
+    if (slot < 0 || slot >= Character::Grimoire::slot_count || player >= m_players.size()) return;
+    m_world.get<Character::Grimoire>(m_players[player])->slots[static_cast<std::size_t>(slot)] = std::move(name);
 }
 
 std::expected<std::uint64_t, std::string> Simulation::provide_program(std::span<const std::byte> bytes) {
@@ -117,15 +124,20 @@ bool Simulation::has_program(std::uint64_t hash) const { return m_programs.find(
 Runes::ProgramLibrary::Report Simulation::reload_spells(const std::filesystem::path& directory) { return m_programs.load_directory(directory); }
 
 void Simulation::apply(const Replay::Command& c) {
+    if (c.player >= m_players.size()) {
+        ++m_unknown_player_commands; // нет такого игрока: отказ одинаков у всех
+        return;
+    }
+    const ECS::Entity who = m_players[c.player];
     switch (static_cast<CommandType>(c.type)) {
     case CommandType::Move: {
         const MoveCommand move = MoveCommand::decode(c);
         FVec3 dir{move.dx, Fixed{}, move.dz};
         if (Math::length(dir) > Fixed::from_int(1)) dir = Math::normalize(dir);
-        m_world.get<Character::Motor>(m_player)->wish = dir;
+        m_world.get<Character::Motor>(who)->wish = dir;
         break;
     }
-    case CommandType::Jump: m_world.get<Character::Motor>(m_player)->jump = true; break;
+    case CommandType::Jump: m_world.get<Character::Motor>(who)->jump = true; break;
     case CommandType::SetProgram: {
         const SetProgramCommand set = SetProgramCommand::decode(c);
         const std::string name = Runes::program_name_for_hash(set.hash);
@@ -133,20 +145,30 @@ void Simulation::apply(const Replay::Command& c) {
             ++m_rejected_programs;
             break;
         }
-        m_world.get<Character::Grimoire>(m_player)->slots[static_cast<std::size_t>(set.slot)] = name;
+        // Цель — чужой гримуар (писарь пилота) или свой; нет такого игрока — отказ, как у программы без блоба.
+        const ECS::Entity owner = set.target < 0 ? who : set.target < static_cast<int>(m_players.size()) ? m_players[static_cast<std::size_t>(set.target)] : ECS::Entity{};
+        if (owner.generation == 0) {
+            ++m_rejected_programs;
+            break;
+        }
+        m_world.get<Character::Grimoire>(owner)->slots[static_cast<std::size_t>(set.slot)] = name;
         ++m_programs_set;
         break;
     }
     case CommandType::Cast: {
         const CastCommand cast = CastCommand::decode(c);
         if (cast.slot < 0 || cast.slot >= Character::Grimoire::slot_count) break;
-        const std::string& name = m_world.get<Character::Grimoire>(m_player)->slots[static_cast<std::size_t>(cast.slot)];
+        const std::string& name = m_world.get<Character::Grimoire>(who)->slots[static_cast<std::size_t>(cast.slot)];
         std::shared_ptr<const Runes::Program> program = m_programs.find(name);
         if (!program) {
             ++m_failed_casts; // в слоте нет заклинания (файл не найден или с ошибкой)
             break;
         }
-        (void)m_spells.cast(m_world, m_player, std::move(program), Math::normalize(cast.aim), cast.source);
+        if (m_config.use_ranks && m_ranks.first_locked(*program, m_mastery[c.player].rank)) {
+            ++m_locked_casts; // руна ещё не открыта: заклинание не запускается
+            break;
+        }
+        (void)m_spells.cast(m_world, who, std::move(program), Math::normalize(cast.aim), cast.source);
         ++m_casts;
         break;
     }
@@ -172,6 +194,19 @@ void Simulation::phase_commands() {
 // 2. активные заклинания в порядке id; мир они меняют только данными (эффектами)
 void Simulation::phase_spells() { m_spells.tick(m_world, *m_host, m_effects); }
 
+// Опыт за дело: ранг растёт — максимум личной маны тоже. Игрок ищется по сущности мага.
+void Simulation::award_experience(ECS::Entity caster, std::uint32_t xp) {
+    for (std::size_t i = 0; i < m_players.size(); ++i) {
+        if (m_players[i] != caster) continue;
+        const Progress::Award a = Progress::award(m_ranks, m_mastery[i], xp);
+        if (a.ranked_up()) {
+            ++m_rank_ups;
+            if (Character::ManaPool* pool = m_world.get<Character::ManaPool>(caster)) pool->max = m_config.player_mana + m_ranks.mana_bonus(a.new_rank);
+        }
+        return;
+    }
+}
+
 // 3. правки ландшафта — эффекты в порядке исполнения
 void Simulation::phase_terrain() {
     m_edited.clear();
@@ -179,6 +214,7 @@ void Simulation::phase_terrain() {
         Terrain::EditResult r = e.kind == Runes::Effect::Kind::Carve ? m_terrain.carve_sphere(e.position, e.radius) : m_terrain.add_sphere(e.position, e.radius);
         if (r.changed()) m_edited.push_back(std::move(r));
         ++m_edits_applied;
+        if (m_config.use_ranks) award_experience(e.caster, Progress::effect_xp(e.radius));
     }
     m_effects.clear();
 }
@@ -216,6 +252,11 @@ Replay::StateHashes Simulation::hashes() const {
     tick.add(m_tick);
     Replay::StateHashes h;
     h.add("terrain", m_terrain.hash()).add("mana", m_mana.hash()).add("characters", characters.value()).add("spells", spells.value()).add("rng", rng.value()).add("tick", tick.value());
+    if (m_config.use_ranks) { // отдельное имя и только при включённой прогрессии: прежние эталоны не меняются
+        Math::Hasher mastery;
+        for (const Progress::Mastery& m : m_mastery) Progress::hash_mastery(m, mastery);
+        h.add("mastery", mastery.value());
+    }
     return h;
 }
 

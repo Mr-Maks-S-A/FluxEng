@@ -11,11 +11,11 @@ using Runes::Rune;
 
 Family family_of(Rune rune) noexcept {
     switch (rune) {
-    case Rune::Push: case Rune::Dup: case Rune::Drop: return Family::Data;
-    case Rune::Add: case Rune::Mul: return Family::Arithmetic;
+    case Rune::Push: case Rune::Dup: case Rune::Drop: case Rune::Load: case Rune::Store: return Family::Data;
+    case Rune::Add: case Rune::Mul: case Rune::Sub: case Rune::Lt: return Family::Arithmetic;
     case Rune::Caster: case Rune::Aim: case Rune::Target: return Family::Context;
     case Rune::ManaAt: return Family::Sense;
-    case Rune::JmpIf: case Rune::Halt: return Family::Control;
+    case Rune::JmpIf: case Rune::Halt: case Rune::Jmp: case Rune::Call: case Rune::Ret: return Family::Control;
     default: return Family::Effect;
     }
 }
@@ -34,6 +34,7 @@ Color family_color(Family family) noexcept {
 
 std::string glyph_label(const GraphNode& node) {
     const std::string name(Runes::rune_name(node.rune));
+    if (node.rune == Rune::Load || node.rune == Rune::Store) return std::format("{}\n#{}", name, node.value); // слот переменной
     if (node.rune != Rune::Push) return name;
     return std::format("{}\n{:g}", name, static_cast<double>(node.value) / 65536.0);
 }

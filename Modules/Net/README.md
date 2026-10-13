@@ -59,3 +59,11 @@ if (auto d = net.desync()) report(d->tick, d->subsystems);   // «разошли
 
 Примеры: `01_two_peers` (минимальный цикл), `02_bad_network_and_desync` (плохая сеть, обнаружение расхождения), `03_star_node` (звезда на `Node`). Тесты: `NetTests`;
 бенчмарки: `NetBenchmarks` (кодирование/разбор пакетов, кадр протокола на 2/4/8 пиров, потери, доставка блоба).
+
+## Дополнения (2026-10-13)
+
+- **Номер игрока.** Каждая исполняемая команда несёт `player` — номер пира, приславшего её (проставляет `Lockstep::advance`). Протокол версии 3.
+- **`LockstepDriver<Sim>`** (`Net/Driver.hpp`): кадр сетевой игры одним вызовом — `pump`, ввод, `advance`, блоб симуляции и в запись раньше команды,
+  `tick`, `report_hashes`; необязательная запись партии (`set_record`) и предел тиков (`set_tick_limit`).
+- **`UdpTransport`** (`Net/Udp.hpp`): настоящий UDP по loopback и сети, тот же интерфейс `Transport`, что у `SimulatedNetwork`. POSIX; на Windows — ошибка при `open`.
+- **Живость.** `pumps_since_heard(peer)`, `silent_peers(threshold)` — детектор молчания пира (исключать пира или ждать — решает игра).

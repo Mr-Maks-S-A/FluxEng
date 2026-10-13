@@ -19,7 +19,7 @@
  */
 
 #include <Challenge/Play.hpp>
-#include <Net/Lockstep.hpp>
+#include <Net/Driver.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -54,13 +54,19 @@ Options parse(int argc, char** argv) {
     return o;
 }
 
+/// В партии два игрока: у каждого свой маг (пилот — игрок 0, писарь — игрок 1; писарь правит гримуар пилота).
+SpellSim::Config party_config(SpellSim::Config config) {
+    config.player_count = 2;
+    return config;
+}
+
 /// Один участник: свой мир, судья и сетевой узел. Роль определяет, что игрок вносит в общий ввод.
 class Player {
 public:
     enum class Role { Pilot, Scribe };
 
     Player(Role role, const Challenge::Level& level, Net::Transport& transport, Net::PeerId id, std::uint32_t input_delay)
-        : m_role(role), m_level(level), m_sim(level.config), m_referee(level),
+        : m_role(role), m_sim(party_config(level.config)), m_referee(level),
           m_net(transport, {.local = id, .peers = 2, .seed = level.config.seed, .config_hash = Challenge::level_hash(level), .input_delay = input_delay}) {
         Challenge::install_library(level, m_sim);
         m_net.set_blob_reference(SpellSim::blob_reference); // SetProgram ждёт свою программу
@@ -71,44 +77,37 @@ public:
     [[nodiscard]] const SpellSim::Simulation& sim() const { return m_sim; }
     [[nodiscard]] const Net::Lockstep& net() const { return m_net; }
 
-    /// Кадр: сеть → ввод → шаг. Закончивший игрок продолжает `pump`: его пакеты (подтверждения, ввод) нужны партнёру.
+    /// Кадр: сеть → ввод → шаг (`LockstepDriver`). Закончивший игрок продолжает `pump`: его пакеты (подтверждения, ввод) нужны партнёру.
     void frame(const Challenge::Solution& solution, bool cheat) {
-        m_net.pump();
-        if (done()) return;
-        if (m_net.needs_input()) {
-            std::vector<Replay::Command> mine;
+        if (done()) {
+            m_net.pump();
+            return;
+        }
+        const auto input = [&](std::vector<Replay::Command>& mine) {
             if (m_role == Role::Scribe && !m_programs_sent) { // писарь пишет заклинания: блоб идёт по сети, в команде — хеш
                 m_programs_sent = true;
                 for (const auto& [slot, text] : solution.programs) {
                     const auto program = Runes::parse_program(text);
                     if (!program) continue;
-                    mine.push_back(SpellSim::set_program_command(slot, m_net.submit_blob(Runes::encode_program(*program))));
+                    mine.push_back(SpellSim::set_program_command(slot, m_net.submit_blob(Runes::encode_program(*program)), 0)); // в гримуар пилота (игрок 0)
                 }
             }
             if (m_role == Role::Pilot && solution.policy) solution.policy(m_sim, mine); // пилот смотрит в свой мир, ходит и кастует
-            m_net.submit(mine);
-        }
-        if (!m_net.ready()) return;
-
-        const auto span = m_net.advance();
-        std::vector<Replay::Command> commands(span.begin(), span.end());
-        for (const Replay::Command& c : commands) { // Lockstep гарантирует, что блоб пришёл: отдаём программу своей симуляции
-            if (const auto hash = SpellSim::blob_reference(c); hash && !m_sim.has_program(*hash)) (void)m_sim.provide_program(*m_net.blob(*hash));
-        }
-        if (cheat && m_role == Role::Scribe && m_sim.tick_number() == 20) { // мимо сети: лишний каст только в мире писаря — миры уйдут друг от друга
-            commands.push_back(SpellSim::cast_command(0, Runes::ManaSource::Personal, {Math::Fixed{}, Math::Fixed::from_int(-1), Math::Fixed{}}));
-        }
-        m_sim.tick(commands);
-        m_referee.observe(m_sim);
-        m_net.report_hashes(m_sim.hashes());
+        };
+        const auto tamper = [&](std::vector<Replay::Command>& commands) {
+            if (cheat && m_role == Role::Scribe && m_sim.tick_number() == 20) { // мимо сети: лишний каст только в мире писаря — миры уйдут друг от друга
+                commands.push_back(SpellSim::cast_command(0, Runes::ManaSource::Personal, {Math::Fixed{}, Math::Fixed::from_int(-1), Math::Fixed{}}));
+            }
+        };
+        if (m_driver.frame(input, tamper)) m_referee.observe(m_sim);
     }
 
 private:
     Role m_role;
-    const Challenge::Level& m_level;
     SpellSim::Simulation m_sim;
     Challenge::Referee m_referee;
     Net::Lockstep m_net;
+    Net::LockstepDriver<SpellSim::Simulation> m_driver{m_sim, m_net};
     bool m_programs_sent = false;
 };
 

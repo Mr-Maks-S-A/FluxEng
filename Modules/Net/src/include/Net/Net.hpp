@@ -4,7 +4,9 @@
  * @brief Зонтичный заголовок модуля Net: пакеты, транспорт, плохая сеть в памяти, lockstep, узел с темпом.
  */
 
+#include <Net/Driver.hpp>
 #include <Net/Lockstep.hpp>
 #include <Net/Node.hpp>
 #include <Net/Transport.hpp>
+#include <Net/Udp.hpp>
 #include <Net/Wire.hpp>

@@ -15,6 +15,7 @@ std::string_view code_name(Code code) noexcept {
     case Code::JumpOutOfRange: return "jump_out_of_range";
     case Code::ProgramTooLong: return "program_too_long";
     case Code::ProgramEmpty: return "program_empty";
+    case Code::BadVariable: return "bad_variable";
     case Code::NoEntry: return "no_entry";
     case Code::MissingNode: return "missing_node";
     case Code::StatementAsValue: return "statement_as_value";
@@ -35,6 +36,7 @@ std::string_view code_name(Code code) noexcept {
     case Code::DuplicateNode: return "duplicate_node";
     case Code::UnreachableNode: return "unreachable_node";
     case Code::UnusedValue: return "unused_value";
+    case Code::NotInGraph: return "not_in_graph";
     }
     return "?";
 }
@@ -52,6 +54,7 @@ std::string Diagnostic::message() const {
     case Code::JumpOutOfRange: return "переход за пределы программы";
     case Code::ProgramTooLong: return detail.empty() ? "программа длиннее 256 рун" : "программа длиннее 256 рун (" + detail + ")";
     case Code::ProgramEmpty: return "программа пуста";
+    case Code::BadVariable: return "переменная — номер слота 0…7: " + detail;
     case Code::NoEntry: return "не задан вход графа (entry)";
     case Code::MissingNode: return "ссылка на несуществующий узел";
     case Code::StatementAsValue: return detail + " — оператор, а не значение";
@@ -72,6 +75,7 @@ std::string Diagnostic::message() const {
     case Code::DuplicateNode: return "повторный номер узла " + detail;
     case Code::UnreachableNode: return "оператор недостижим от входа графа: его никто не вызывает";
     case Code::UnusedValue: return "значение не используется";
+    case Code::NotInGraph: return detail + " есть только в тексте программы: граф переходов и подпрограмм не выражает";
     }
     return {};
 }

@@ -20,6 +20,8 @@ std::string_view failure_text(Failure failure) noexcept {
     case Failure::OutOfMana: return "out of mana";
     case Failure::OutOfBudget: return "out of budget";
     case Failure::UnknownRune: return "unknown rune";
+    case Failure::CallOverflow: return "call overflow";
+    case Failure::BadVariable: return "bad variable";
     }
     return "?";
 }
@@ -145,12 +147,20 @@ CostEstimate estimate_cost(const Program& program, const Tuning& tuning) {
         case Rune::Push: stack.emplace_back(Fixed::from_raw(in.operand)); break;
         case Rune::Dup: if (!stack.empty()) stack.push_back(stack.back()); break;
         case Rune::Drop: (void)pop(); break;
-        case Rune::Add: case Rune::Mul: {
+        case Rune::Add: case Rune::Mul: case Rune::Sub: {
             const auto b = pop(), a = pop();
-            if (a && b) stack.emplace_back(in.rune == Rune::Add ? *a + *b : *a * *b);
+            if (a && b) stack.emplace_back(in.rune == Rune::Add ? *a + *b : in.rune == Rune::Sub ? *a - *b : *a * *b);
             else stack.emplace_back(std::nullopt);
             break;
         }
+        case Rune::Lt: (void)pop(), (void)pop(); stack.emplace_back(std::nullopt); break;
+        case Rune::Store: (void)pop(); break;
+        case Rune::Load: stack.emplace_back(std::nullopt); break; // значение переменной в оценке неизвестно
+        case Rune::Jmp: case Rune::Call:
+            if (static_cast<std::size_t>(in.operand) <= pc) out.loops = true;
+            stack.clear();
+            break;
+        case Rune::Ret: stack.clear(); break;
         case Rune::Caster: case Rune::Aim: case Rune::Target: for (int i = 0; i < 3; ++i) stack.emplace_back(std::nullopt); break;
         case Rune::ManaAt: for (int i = 0; i < 3; ++i) (void)pop(); stack.emplace_back(std::nullopt); break;
         case Rune::JmpIf:
@@ -273,6 +283,43 @@ void SpellSystem::run(ECS::World& world, SpellHost& host, EffectBuffer& effects,
             push(a * b);
             break;
         }
+        case Rune::Sub: {
+            const Fixed b = pop(), a = pop();
+            push(a - b);
+            break;
+        }
+        case Rune::Lt: {
+            const Fixed b = pop(), a = pop();
+            push(a < b ? Fixed::from_int(1) : Fixed{});
+            break;
+        }
+        case Rune::Store: {
+            const Fixed v = pop();
+            if (m.status != Status::Running) break;
+            if (in.operand < 0 || in.operand >= variable_count) fail(Failure::BadVariable);
+            else m.vars[static_cast<std::size_t>(in.operand)] = v;
+            break;
+        }
+        case Rune::Load:
+            if (in.operand < 0 || in.operand >= variable_count) fail(Failure::BadVariable);
+            else push(m.vars[static_cast<std::size_t>(in.operand)]);
+            break;
+        case Rune::Jmp:
+            if (in.operand < 0 || static_cast<std::size_t>(in.operand) >= program.code.size()) fail(Failure::JumpOutOfRange);
+            else m.pc = static_cast<std::uint32_t>(in.operand);
+            break;
+        case Rune::Call:
+            if (in.operand < 0 || static_cast<std::size_t>(in.operand) >= program.code.size()) fail(Failure::JumpOutOfRange);
+            else if (m.csp >= call_depth) fail(Failure::CallOverflow);
+            else {
+                m.calls[m.csp++] = m.pc; // pc уже указывает на руну после CALL
+                m.pc = static_cast<std::uint32_t>(in.operand);
+            }
+            break;
+        case Rune::Ret:
+            if (m.csp == 0) m.status = Status::Halted; // возврат без вызова — конец заклинания
+            else m.pc = m.calls[--m.csp];
+            break;
         case Rune::Caster: push_vec(host.position(who.caster)); break;
         case Rune::Aim: vec = who.aim, push(vec.x), push(vec.y), push(vec.z); break;
         case Rune::Target: push_vec(host.target(who.caster, who.aim, m_tuning.target_range)); break;
@@ -346,6 +393,14 @@ void hash_spells(const ECS::World& world, Math::Hasher& hasher) {
         hasher.add(spell.index);
         hasher.add(m.pc), hasher.add(m.sp), hasher.add(m.runes_executed), hasher.add(static_cast<std::uint64_t>(m.status));
         for (std::uint32_t i = 0; i < m.sp; ++i) hasher.add_signed(m.stack[i].raw);
+        // Переменные и вызовы — только если ими пользуются: хеш прежних заклинаний (golden-записи) не меняется.
+        bool extended = m.csp != 0;
+        for (const Math::Fixed v : m.vars) extended = extended || v.raw != 0;
+        if (extended) {
+            hasher.add(m.csp);
+            for (std::uint32_t i = 0; i < m.csp; ++i) hasher.add(m.calls[i]);
+            for (const Math::Fixed v : m.vars) hasher.add_signed(v.raw);
+        }
         hasher.add_signed(b.remaining.raw()), hasher.add_signed(b.spent.raw());
     }
 }

@@ -11,7 +11,8 @@ namespace Runes {
 namespace {
 
 constexpr std::array<std::string_view, static_cast<std::size_t>(Rune::Count)> names = {
-    "PUSH", "DUP", "DROP", "ADD", "MUL", "CASTER", "AIM", "TARGET", "MANA_AT", "JMP_IF", "HALT", "DRAW", "CARVE", "RAISE"};
+    "PUSH", "DUP", "DROP", "ADD", "MUL", "CASTER", "AIM", "TARGET", "MANA_AT", "JMP_IF", "HALT", "DRAW", "CARVE", "RAISE",
+    "SUB", "LT", "STORE", "LOAD", "JMP", "CALL", "RET"};
 
 std::string_view trim(std::string_view s) {
     while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
@@ -111,6 +112,13 @@ std::expected<Program, Diagnostic> parse_program(std::string_view text, std::str
                 auto value = parse_fixed(argument);
                 if (!value) return std::unexpected(Diagnostic{value.error().code, line_number, no_node, value.error().detail});
                 p.instruction.operand = *value;
+            } else if (p.instruction.rune == Rune::Store || p.instruction.rune == Rune::Load) {
+                std::int32_t slot = -1;
+                const auto [end, ec] = std::from_chars(argument.data(), argument.data() + argument.size(), slot);
+                if (ec != std::errc{} || end != argument.data() + argument.size() || slot < 0 || slot >= variable_count) {
+                    return std::unexpected(Diagnostic{Code::BadVariable, line_number, no_node, std::string(argument)});
+                }
+                p.instruction.operand = slot;
             } else if (std::isdigit(static_cast<unsigned char>(argument.front()))) {
                 std::int32_t target = 0;
                 const auto [end, ec] = std::from_chars(argument.data(), argument.data() + argument.size(), target);
@@ -136,7 +144,7 @@ std::expected<Program, Diagnostic> parse_program(std::string_view text, std::str
             if (it == labels.end()) return std::unexpected(Diagnostic{Code::UnknownLabel, p.line, no_node, p.label});
             p.instruction.operand = it->second;
         }
-        if (p.instruction.rune == Rune::JmpIf && (p.instruction.operand < 0 || static_cast<std::size_t>(p.instruction.operand) >= pending.size())) {
+        if (is_jump(p.instruction.rune) && (p.instruction.operand < 0 || static_cast<std::size_t>(p.instruction.operand) >= pending.size())) {
             return std::unexpected(Diagnostic{Code::JumpOutOfRange, p.line});
         }
         program.code.push_back(p.instruction);
@@ -149,7 +157,7 @@ std::string disassemble(const Program& program) {
     for (const Instruction& i : program.code) {
         out += rune_name(i.rune);
         if (i.rune == Rune::Push) out += ' ' + std::to_string(Math::Fixed::from_raw(i.operand).to_double());
-        if (i.rune == Rune::JmpIf) out += ' ' + std::to_string(i.operand);
+        if (is_jump(i.rune) || i.rune == Rune::Store || i.rune == Rune::Load) out += ' ' + std::to_string(i.operand);
         out += '\n';
     }
     return out;

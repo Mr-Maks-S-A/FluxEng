@@ -31,7 +31,8 @@
 namespace Net {
 
 using PeerId = std::uint8_t;
-constexpr std::uint8_t protocol_version = 2;
+constexpr std::uint8_t protocol_version = 3; ///< 3: в команде появился номер игрока.
+constexpr std::size_t wire_command_size = 18; ///< Команда в пакете: type, arg, x, y, z, player.
 constexpr std::size_t max_peers = 16;               ///< Игроков в одной партии.
 constexpr std::size_t max_packet_size = 1200;       ///< Влезает в один UDP-датаграммный MTU без фрагментации.
 constexpr std::size_t max_commands_per_tick = 16;   ///< Команд одного пира на тик (остальное — в следующий).

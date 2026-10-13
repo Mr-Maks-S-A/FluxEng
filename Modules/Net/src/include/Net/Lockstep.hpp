@@ -77,6 +77,7 @@ public:
     Lockstep(Transport& transport, const LockstepConfig& config);
 
     void set_blob_reference(BlobReference reference) { m_blob_reference = std::move(reference); }
+    [[nodiscard]] const BlobReference& blob_reference() const noexcept { return m_blob_reference; }
 
     /// @brief Принять пакеты, ответить, отправить свои новые и неподтверждённые данные, подтверждения блобов.
     void pump();
@@ -111,6 +112,16 @@ public:
     [[nodiscard]] const LockstepConfig& config() const noexcept { return m_config; }
     /// @brief Соседи (с кем идёт обмен напрямую).
     [[nodiscard]] const std::vector<PeerId>& neighbors() const noexcept { return m_neighbors; }
+
+    /**
+     * @brief Сколько вызовов `pump` прошло с последнего принятого от соседа действительного пакета (0 — слышали только что).
+     * Для пира, который ещё ни разу не отзывался, отсчёт идёт с создания узла. Не сосед и свой номер — 0.
+     * Это **детектор**: сеть молчит — решает слой выше (ждать, показать «ожидание игрока N», завершить партию).
+     * Исключить пира из партии в lockstep можно только по общему решению всех: у каждого свой «последний слышал».
+     */
+    [[nodiscard]] std::uint32_t pumps_since_heard(PeerId peer) const noexcept;
+    /// @brief Соседи, молчащие дольше `threshold_pumps` (по возрастанию номера).
+    [[nodiscard]] std::vector<PeerId> silent_peers(std::uint32_t threshold_pumps) const;
 
 private:
     struct OutgoingBlob {
@@ -150,6 +161,7 @@ private:
     std::vector<std::vector<std::uint32_t>> m_sent_have;  ///< [сосед]: какие подтверждения (m_have) ушли ему в последний раз.
     std::string m_failure;
     std::uint32_t m_pumps = 0;
+    std::vector<std::uint32_t> m_last_heard;              ///< По пирам: номер `pump`, на котором пришёл их последний действительный пакет.
 
     std::map<std::uint64_t, std::vector<std::byte>> m_blobs;
     std::map<std::uint64_t, Partial> m_partial;

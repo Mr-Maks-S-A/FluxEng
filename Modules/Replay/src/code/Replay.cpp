@@ -69,6 +69,7 @@ Bytes encode_command(const Command& c) {
     b.u32(static_cast<std::uint32_t>(c.x));
     b.u32(static_cast<std::uint32_t>(c.y));
     b.u32(static_cast<std::uint32_t>(c.z));
+    if (c.player != 0) b.u16(c.player); // игрок 0 — 16 байт, как в старых записях
     return b;
 }
 
@@ -80,6 +81,7 @@ std::optional<Command> decode_command(std::span<const std::byte> payload) {
     out.x = static_cast<std::int32_t>(c.u32());
     out.y = static_cast<std::int32_t>(c.u32());
     out.z = static_cast<std::int32_t>(c.u32());
+    if (payload.size() == 18) out.player = c.u16();
     return c.ok && c.at == payload.size() ? std::optional<Command>(out) : std::nullopt;
 }
 
@@ -169,7 +171,7 @@ std::string format_with(const std::vector<CommandSchema>& schemas, const Command
     };
     if (!schema) {
         std::snprintf(buffer, sizeof buffer, "type#%u arg=%d x=%d y=%d z=%d", c.type, c.arg, c.x, c.y, c.z);
-        return buffer;
+        return c.player != 0 ? "p" + std::to_string(c.player) + ' ' + buffer : std::string(buffer);
     }
     std::string out = schema->name;
     const std::int32_t values[4] = {c.arg, c.x, c.y, c.z};
@@ -177,7 +179,7 @@ std::string format_with(const std::vector<CommandSchema>& schemas, const Command
         if (schema->fields[i].name.empty()) continue;
         out += ' ' + schema->fields[i].name + '=' + value(schema->fields[i], values[i]);
     }
-    return out;
+    return c.player != 0 ? "p" + std::to_string(c.player) + ' ' + out : out;
 }
 
 /// Читает старый плоский файл (версии 1 и 2: без журнала). Хеши получают имена h0, h1, h2.
@@ -218,7 +220,12 @@ std::expected<Recording, std::string> load_legacy(const std::string& path) {
     for (std::uint32_t i = 0; i < count; ++i) {
         std::uint32_t tick = 0;
         Command c;
-        if (!get(tick) || !get(c)) return std::unexpected("запись обрезана: " + path);
+        // Старый файл хранит команду как есть — 16 байт без игрока.
+        std::uint16_t type = 0;
+        std::int16_t arg = 0;
+        std::int32_t x = 0, y = 0, z = 0;
+        if (!get(tick) || !get(type) || !get(arg) || !get(x) || !get(y) || !get(z)) return std::unexpected("запись обрезана: " + path);
+        c = {.type = type, .arg = arg, .x = x, .y = y, .z = z};
         r.add(tick, c);
     }
     return r;
