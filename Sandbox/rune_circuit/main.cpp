@@ -42,6 +42,11 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #ifndef RUNE_CIRCUIT_DIR
 #define RUNE_CIRCUIT_DIR "circles"
 #endif
@@ -900,7 +905,18 @@ void expect(bool ok, const char* what) {
     if (!ok) ++g_failed;
 }
 
-std::string dir() { return RUNE_CIRCUIT_DIR; }
+/// Каталог примеров: рядом с exe (готовая сборка), иначе путь, заданный при сборке.
+std::string dir(const char* argv0 = nullptr) {
+    static std::string d;
+    if (d.empty()) {
+        d = RUNE_CIRCUIT_DIR;
+        if (argv0) {
+            const auto beside = std::filesystem::absolute(argv0).parent_path() / "circles";
+            if (std::filesystem::exists(beside)) d = beside.string();
+        }
+    }
+    return d;
+}
 
 bool has_diag(const Compiled& c, const char* sub) {
     for (const Diag& d : c.diags)
@@ -1034,10 +1050,10 @@ int self_check() {
         Caster kl(l.circuit, e3, false);
         const CastResult rl = kl.run();
         expect(rl.outcome == Outcome::Done && rl.ambient_drawn > 0 && rl.ambient_drawn < 14 * 10, "логика И: заклинание срабатывает не с первого такта");
-        Circuit far = l.circuit;
-        far.distance = 50;
-        Environment e4; e4.mix = far.world;
-        Caster kf(far, e4, false);
+        Circuit distant = l.circuit;
+        distant.distance = 50;
+        Environment e4; e4.mix = distant.world;
+        Caster kf(distant, e4, false);
         expect(kf.run().ambient_drawn == 0, "логика И: цель далеко — затвор закрыт");
     }
 
@@ -1059,6 +1075,10 @@ int self_check() {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+    dir(argv[0]);
     Options o;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
