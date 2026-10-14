@@ -1,0 +1,20 @@
+# Вложенный круг = вызов функции: «Burn» — схема внутри схемы, параметр power.
+def Burn power=6
+  rune a = In
+  rune f = Convert to=fire share=1
+  rune h = Heat use=$power
+  rune b = Out
+  flow a -> f -> h -> b
+end
+
+spell Torch ring=3 time=8
+caster skill=8 tools=1.5 purity=0.9 personal=40
+world  mana=200
+
+rune s  = Touch
+rune c1 = Condenser power=8
+call b  = Burn power=0.7
+rune i1 = Impulse use=1
+
+flow   c1 -> b -> i1
+signal s ~> c1

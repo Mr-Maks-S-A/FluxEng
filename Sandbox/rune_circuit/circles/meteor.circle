@@ -1,0 +1,17 @@
+# Метеорит — схема со слайда «РУННАЯ СХЕМА · ПРИМЕР».
+# Сенсор в центре открывает поток; мана среды течёт по дуге:
+# Конденсатор -> Земля (ядро) -> Огонь (раскалить) -> Импульс (к цели).
+spell Meteor ring=6 time=10
+caster skill=8 tools=1.5 purity=0.9 personal=60
+world  mana=300
+
+rune s  = Touch
+rune c1 = Condenser power=10
+rune e1 = Convert to=earth share=1
+rune m1 = Matter use=0.5 radius=1
+rune f1 = Convert to=fire share=0.4
+rune h1 = Heat use=0.5
+rune i1 = Impulse use=1
+
+flow   c1 -> e1 -> m1 -> f1 -> h1 -> i1
+signal s ~> c1

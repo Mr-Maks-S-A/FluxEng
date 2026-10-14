@@ -1,0 +1,12 @@
+# Без маны среды игрок работает «от батарейки»: везде, но дорого.
+spell Battery ring=4 time=6
+caster skill=8 tools=1.5 purity=0.9 personal=80
+world  mana=0 reset=1
+
+rune s  = Touch
+rune c1 = Condenser power=5
+rune e1 = Convert to=earth share=1
+rune i1 = Impulse use=1
+
+flow   c1 -> e1 -> i1
+signal s ~> c1

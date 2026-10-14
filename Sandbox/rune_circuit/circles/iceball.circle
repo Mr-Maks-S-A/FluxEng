@@ -1,0 +1,14 @@
+# Ледяной шар. Остаток огненного шара мешает: огонь — противоположный аспект воде.
+# Запустите: RuneCircuit fireball.circle iceball.circle  (порядок кастов — тактика).
+spell Iceball ring=4 time=8
+caster skill=8 tools=1.5 purity=0.9 personal=60
+world  mana=300
+
+rune s  = Target
+rune c1 = Condenser power=10
+rune w1 = Convert to=water share=1
+rune m1 = Matter use=0.6
+rune i1 = Impulse use=1
+
+flow   c1 -> w1 -> m1 -> i1
+signal s ~> c1

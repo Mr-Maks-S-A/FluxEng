@@ -1,0 +1,10 @@
+# Схема с ошибками: язык называет строку и причину, а не падает.
+spell Broken ring=4 time=6
+rune c1 = Condenser power=10
+rune f1 = Convert to=lava
+rune i1 = Impulse
+rune i2 = Impulse
+flow   c1 -> f1
+flow   f1 -> i1 -> f1
+flow   i2 -> i1
+signal c1 ~> i1

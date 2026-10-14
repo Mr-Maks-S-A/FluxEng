@@ -16,6 +16,7 @@
 #   CoopScribe   — «пилот и писарь»: два игрока проходят уровень вместе по плохой сети (Net lockstep + SetProgram), консольная
 #   FirstSpell   — пре-альфа «Первое заклинание»: персонаж на SDF-ландшафте, руны, мана как поле, запись и повтор
 #   AssetLab     — путь ассета: glTF/PNG/JSON → cook → пак → VFS → менеджер с фоновой загрузкой → GPU (модуль движка в клиенте)
+#   RuneCircuit  — язык рунных схем: заклинание как транзистор (поток маны среды, сигнал личной маны, аспекты); консольный, только stdlib
 #   NetSim       — без окна: несколько узлов «смотрят» на одну детерминированную симуляцию через плохую сеть (lockstep)
 #
 # Все игры рисуют через RHI: `--backend gl|vulkan` выбирает графический API.
@@ -208,4 +209,19 @@ if(BUILD_TESTING)
         Sandbox.NetSim.star Sandbox.NetSim.mesh Sandbox.NetSim.hostile Sandbox.NetSim.hostile_mesh Sandbox.NetSim.drift_threads
         Sandbox.NetSim.desync_star Sandbox.NetSim.desync_mesh
         PROPERTIES LABELS "sandbox;netsim" TIMEOUT 120)
+endif()
+
+# ------------------------------------------------------------------------------
+# RuneCircuit — язык рунных схем (.circle) по презентации «Грамматика рунного круга»: разбор с диагнозом по строкам,
+# вложенные круги, тактовая симуляция потока маны (аспекты, усиление, релаксация, насыщение, перегрузка).
+# Консольный, без окна и GPU, только стандартная библиотека. Подробно — rune_circuit/LANGUAGE.md.
+# ------------------------------------------------------------------------------
+add_executable(RuneCircuit rune_circuit/main.cpp)
+target_link_libraries(RuneCircuit PRIVATE SandboxWarnings)
+target_compile_definitions(RuneCircuit PRIVATE RUNE_CIRCUIT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/rune_circuit/circles")
+if(BUILD_TESTING)
+    add_test(NAME Sandbox.RuneCircuit.check COMMAND RuneCircuit --check)
+    set_tests_properties(Sandbox.RuneCircuit.check PROPERTIES LABELS "sandbox" TIMEOUT 60 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    add_test(NAME Sandbox.RuneCircuit.meteor COMMAND RuneCircuit "${CMAKE_CURRENT_SOURCE_DIR}/rune_circuit/circles/meteor.circle")
+    set_tests_properties(Sandbox.RuneCircuit.meteor PROPERTIES LABELS "sandbox" TIMEOUT 60 PASS_REGULAR_EXPRESSION "каст 2 — готово")
 endif()

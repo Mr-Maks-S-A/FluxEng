@@ -1,0 +1,12 @@
+# Перегрузка — не руна, а риск: конденсатор тянет больше предела линии, схема срывается и взрывается.
+spell Reckless ring=4 time=6
+caster skill=8 tools=1.5 purity=0.9 personal=80
+world  mana=400
+
+rune s  = Touch
+rune c1 = Condenser power=45
+rune f1 = Convert to=fire share=1
+rune i1 = Impulse use=1
+
+flow   c1 -> f1 -> i1
+signal s ~> c1

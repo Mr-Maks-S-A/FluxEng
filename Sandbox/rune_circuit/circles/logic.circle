@@ -1,0 +1,19 @@
+# Логика сигнала: цель в поле зрения И расстояние меньше 12 И прошло 3 такта.
+spell Sniper ring=5 time=14
+caster skill=8 tools=1.5 purity=0.9 personal=60
+world  mana=300
+
+rune see  = Target
+rune near = Distance lt=12
+rune wait = Timer after=3
+rune ok   = And
+rune c1   = Condenser power=10
+rune e1   = Convert to=earth share=1
+rune m1   = Matter use=0.7
+rune i1   = Impulse use=1
+
+flow   c1 -> e1 -> m1 -> i1
+signal see ~> ok
+signal near ~> ok
+signal wait ~> ok
+signal ok ~> c1
