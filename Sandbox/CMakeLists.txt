@@ -17,6 +17,7 @@
 #   FirstSpell   — пре-альфа «Первое заклинание»: персонаж на SDF-ландшафте, руны, мана как поле, запись и повтор
 #   AssetLab     — путь ассета: glTF/PNG/JSON → cook → пак → VFS → менеджер с фоновой загрузкой → GPU (модуль движка в клиенте)
 #   RuneCircuit  — язык рунных схем: заклинание как транзистор (поток маны среды, сигнал личной маны, аспекты); консольный, только stdlib
+#   SoundPad     — клавиатура-пианино на AudioSystem (SDL3): синтезатор, сэмплы, мелодия, рендер в WAV без устройства
 #   NetSim       — без окна: несколько узлов «смотрят» на одну детерминированную симуляцию через плохую сеть (lockstep)
 #
 # Все игры рисуют через RHI: `--backend gl|vulkan` выбирает графический API.
@@ -224,4 +225,18 @@ if(BUILD_TESTING)
     set_tests_properties(Sandbox.RuneCircuit.check PROPERTIES LABELS "sandbox" TIMEOUT 60 PASS_REGULAR_EXPRESSION "\nOK\n" FAIL_REGULAR_EXPRESSION "ОШИБКА")
     add_test(NAME Sandbox.RuneCircuit.meteor COMMAND RuneCircuit "${CMAKE_CURRENT_SOURCE_DIR}/rune_circuit/circles/meteor.circle")
     set_tests_properties(Sandbox.RuneCircuit.meteor PROPERTIES LABELS "sandbox" TIMEOUT 60 PASS_REGULAR_EXPRESSION "каст 2 — готово")
+endif()
+
+# ------------------------------------------------------------------------------
+# SoundPad — простой проект со звуком: AudioSystem (SDL3) + окно Core. Тесты идут на «немом» драйвере SDL (SDL_AUDIODRIVER=dummy).
+# `--wav` не открывает ни окна, ни устройства: микшер рендерит мелодию в файл.
+# ------------------------------------------------------------------------------
+add_executable(SoundPad sound_pad/main.cpp)
+target_link_libraries(SoundPad PRIVATE engine::Core engine::AudioSystem SandboxWarnings)
+if(BUILD_TESTING)
+    add_test(NAME Sandbox.SoundPad.wav COMMAND SoundPad --wav sound_pad_test.wav)
+    set_tests_properties(Sandbox.SoundPad.wav PROPERTIES LABELS "sandbox" TIMEOUT 60 PASS_REGULAR_EXPRESSION "SoundPad --wav: OK" FAIL_REGULAR_EXPRESSION "ОШИБКА")
+    add_test(NAME Sandbox.SoundPad.autoplay COMMAND SoundPad --autoplay --ticks 1200)
+    set_tests_properties(Sandbox.SoundPad.autoplay PROPERTIES LABELS "gpu;sandbox" TIMEOUT 120 ENVIRONMENT "SDL_AUDIODRIVER=dummy"
+                         PASS_REGULAR_EXPRESSION "SoundPad: OK" FAIL_REGULAR_EXPRESSION "ОШИБКА")
 endif()

@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file Window.hpp
- * @brief Окно: кадр, свойства, ввод, события. Не зависит от платформы — в заголовках нет ни GLFW, ни glad.
+ * @brief Окно: кадр, свойства, ввод, события. Не зависит от платформы — в заголовках нет ни SDL, ни glad.
  *
  * @code
  * auto created = WindowSystem::Window::create({.title = "Game", .width = 1280, .height = 720});
@@ -21,7 +21,7 @@
  * }
  * @endcode
  *
- * **Платформа.** `WindowConfig::backend`: Glfw — настоящее окно ОС, Headless — окно без экрана (события только внедрённые:
+ * **Платформа.** `WindowConfig::backend`: Sdl — настоящее окно ОС, Headless — окно без экрана (события только внедрённые:
  * CI, сервер, автотесты ввода). Свои платформы — реализацией IWindowBackend (Backend.hpp).
  *
  * **Ввод.** Платформа превращает свои события в InputSystem::InputEvent; окно применяет их к InputSystem::InputState
@@ -128,6 +128,9 @@ public:
 
     // ------------------------------------------------------------------ платформа и графический API
 
+    /// @brief Сделать контекст OpenGL окна текущим (если несколько окон или контекстов). Окно без OpenGL — ничего.
+    void make_current() noexcept;
+
     [[nodiscard]] ClientApi api() const noexcept;
     [[nodiscard]] WindowBackend backend() const noexcept;
 
@@ -137,13 +140,13 @@ public:
     /// @brief Создаёт поверхность Vulkan для окна, созданного с `ClientApi::None`. Возвращает VkSurfaceKHR как число.
     [[nodiscard]] std::expected<std::uint64_t, std::string> create_vulkan_surface(std::uintptr_t instance) const;
 
-    /// @brief Дескриптор платформы (GLFWwindow* у бэкенда Glfw); nullptr у пустого окна и у Headless.
+    /// @brief Дескриптор платформы (SDL_Window* у бэкенда Sdl); nullptr у пустого окна и у Headless.
     /// Нужен только коду, который сам говорит с платформой (тесты контекста, интеграции).
     [[nodiscard]] void* native_handle() const noexcept;
     /// @brief Окно создано (есть бэкенд).
     [[nodiscard]] explicit operator bool() const noexcept;
 
-    /// @brief Сколько окон GLFW открыто (GLFW завершается вместе с последним).
+    /// @brief Сколько окон SDL открыто (SDL опускается вместе с последним).
     [[nodiscard]] static int open_windows() noexcept;
 
     struct Impl; ///< Состояние окна в куче: адрес стабилен при перемещении Window.

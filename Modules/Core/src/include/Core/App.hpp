@@ -152,7 +152,7 @@ public:
  * Ввод берётся из WindowSystem в собственных кодах движка (InputSystem::Key, MouseButton): клавиши и кнопки мыши
  * приходят подпиской на `events().key` / `events().mouse_button` (и уходят в шину как `platform.key` /
  * `platform.mouse_button`, по порядку, включая внедрённые Window::inject_*), курсор и колесо — из `input()` за кадр.
- * GLFW и его коды в Core не используются.
+ * SDL и его коды в Core не используются.
  */
 class App {
 public:

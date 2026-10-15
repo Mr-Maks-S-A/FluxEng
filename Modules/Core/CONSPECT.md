@@ -68,7 +68,7 @@ scope.finish → wait_idle → game.shutdown → модули в обратно�
 
 ### 3.6 `ActionMap` — ввод через действия
 - `declare("jump", "Прыжок")` → `ActionId`; повтор имени возвращает прежний id.
-- `bind(id, Binding::key(GLFW_KEY_SPACE))` (несколько привязок на действие), `unbind`, `unbind_all`, `conflicts(id)` (кто ещё использует ту же клавишу).
+- `bind(id, Binding::key(SDL_KEY_SPACE))` (несколько привязок на действие), `unbind`, `unbind_all`, `conflicts(id)` (кто ещё использует ту же клавишу).
 - Запросы: `down/pressed/released(input, id)` — достаточно любой привязки; `axis(input, positive, negative)` → −1/0/+1.
 - `apply(text)` — перепривязка из текста (`имя = КЛАВИША, КЛАВИША`, `#` комментарии): **атомарно** (ошибка со строкой → ничего не применено), заменяет привязки только упомянутых действий. `serialize()` — готовый файл настроек. `binding_name` / `parse_binding` — имена клавиш («W», «SPACE», «MOUSE_LEFT»).
 - Работает поверх `WindowSystem::InputState` (в тестах заполняется вручную).

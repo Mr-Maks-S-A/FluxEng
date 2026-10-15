@@ -9,7 +9,7 @@
 # Чтобы это работало, модуль не полагается на то, что корень движка уже что-то
 # подключил. Вместо этого он просит нужное через функции ниже:
 #
-#   flux_external(glfw)          — сторонняя библиотека из ExternalLibrary/
+#   flux_external(sdl)           — сторонняя библиотека из ExternalLibrary/
 #   flux_module(EventSystem)     — соседний модуль из Modules/
 #   flux_module_option(VAR "…")  — опция тестов/бенчмарков/примеров модуля
 #
@@ -29,7 +29,8 @@ set_property(GLOBAL PROPERTY FLUX_TARGET_doctest   doctest::doctest)
 set_property(GLOBAL PROPERTY FLUX_TARGET_benchmark benchmark::benchmark)
 set_property(GLOBAL PROPERTY FLUX_TARGET_fmt       fmt::fmt)
 set_property(GLOBAL PROPERTY FLUX_TARGET_spdlog    spdlog::spdlog)
-set_property(GLOBAL PROPERTY FLUX_TARGET_glfw      glfw)
+set_property(GLOBAL PROPERTY FLUX_TARGET_sdl       SDL3::SDL3)
+set_property(GLOBAL PROPERTY FLUX_DIR_sdl          SDL)   # каталог в ExternalLibrary, если он назван иначе, чем библиотека
 set_property(GLOBAL PROPERTY FLUX_TARGET_glm       glm::glm)
 set_property(GLOBAL PROPERTY FLUX_TARGET_glad      glad)
 set_property(GLOBAL PROPERTY FLUX_TARGET_stb       stb)
@@ -85,17 +86,30 @@ function(flux_external name)
         set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
         set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
         set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
-    elseif(name STREQUAL "glfw")
-        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-        set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+    elseif(name STREQUAL "sdl")
+        # SDL3 статически: окно, ввод, геймпады, звук. Лишнее (тесты, установка, подсистемы без дела) выключено.
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+        set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+        set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+        set(SDL_DISABLE_INSTALL_DOCS ON CACHE BOOL "" FORCE)
+        set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
+        set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
+        set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+        set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
+        set(SDL_TRAY OFF CACHE BOOL "" FORCE)
     elseif(name STREQUAL "glm")
         set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
     endif()
 
-    set(source_dir "${FLUX_EXTERNAL_DIR}/${name}")
+    get_property(dir_name GLOBAL PROPERTY FLUX_DIR_${name})
+    if(NOT dir_name)
+        set(dir_name ${name})
+    endif()
+    set(source_dir "${FLUX_EXTERNAL_DIR}/${dir_name}")
     if(NOT EXISTS "${source_dir}/CMakeLists.txt")
         message(FATAL_ERROR
             "flux_external: нет ${source_dir}/CMakeLists.txt. "

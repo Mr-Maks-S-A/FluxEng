@@ -9,7 +9,7 @@
 
 Подключение: `#include <RendererSystem/RendererSystem.hpp>`, CMake-цель `engine::RendererSystem`.
 Зависимости библиотеки: `glm`, `glad`, `stb` (stb_image, stb_image_write, stb_truetype, stb_rect_pack,
-stb_easy_font, stb_perlin). Окно и GLFW ей не нужны — достаточно текущего GL-контекста.
+stb_easy_font, stb_perlin). Окно и SDL ей не нужны — достаточно текущего GL-контекста.
 
 ## RHI: выбор графического API
 

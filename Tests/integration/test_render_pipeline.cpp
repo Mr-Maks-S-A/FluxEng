@@ -10,11 +10,7 @@
 #include <RendererSystem/RendererSystem.hpp>
 #include <WindowSystem/Window.hpp>
 
-// Контекст OpenGL этому тесту нужен «на руках»: Window платформенных заголовков больше не раскрывает, поэтому GLFW — здесь.
-// clang-format off
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
-// clang-format on
+// Контекст OpenGL этому тесту нужен «на руках»: Window платформенных заголовков больше не раскрывает, поэтому для переключения контекста есть Window::make_current().
 
 #include <glm/ext/matrix_transform.hpp>
 
@@ -37,7 +33,7 @@ struct Backend3D {
     RHI::Device* device = nullptr;
 };
 
-/// Скрытое окно с OpenGL-контекстом (одно на процесс, не закрывается — glfwTerminate в статическом деструкторе зависает на Wayland).
+/// Скрытое окно с OpenGL-контекстом (одно на процесс, не закрывается: окно живёт до конца процесса).
 WindowSystem::Window* gl_window() {
     static WindowSystem::Window* window = []() -> WindowSystem::Window* {
         auto created = WindowSystem::Window::create({.title = "IntegrationTests", .width = 64, .height = 64, .visible = false, .vsync = false});
@@ -62,7 +58,7 @@ std::vector<Backend3D>& backends() {
         }
         return out;
     }();
-    if (gl_window() != nullptr) glfwMakeContextCurrent(static_cast<GLFWwindow*>(gl_window()->native_handle())); // Core::App из соседних тестов мог сменить контекст
+    if (gl_window() != nullptr) gl_window()->make_current(); // Core::App из соседних тестов мог сменить контекст
     return list;
 }
 

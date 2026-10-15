@@ -4,7 +4,7 @@ target_link_libraries(RendererSystemBenchmarks PRIVATE
     engine::RendererSystem
     RendererSystemOptions
     benchmark::benchmark
-    glfw
+    SDL3::SDL3
 )
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")

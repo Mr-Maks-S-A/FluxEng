@@ -9,7 +9,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FluxModule.cmake")
 # Шина событий, задачи, память тика и кадра, фиксированный тик и модули с жизненным циклом
 # (declare → init → frame/tick → shutdown, порядок по зависимостям). Это то, что нужно и клиенту
 # (Core::App строится поверх), и выделенному серверу (Runtime::run() без окна).
-# Зависимости: MemorySystem, JobSystem, EventSystem. Ни GLFW, ни OpenGL/Vulkan, ни GLM.
+# Зависимости: MemorySystem, JobSystem, EventSystem. Ни SDL, ни OpenGL/Vulkan, ни GLM.
 # ==============================================================================
 flux_module_option(RUNTIMESYSTEM_BUILD_TESTS      "Собирать тесты RuntimeSystem")
 flux_module_option(RUNTIMESYSTEM_BUILD_BENCHMARKS "Собирать бенчмарки RuntimeSystem")

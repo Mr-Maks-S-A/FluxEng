@@ -44,7 +44,7 @@ TEST_CASE("создаётся без дисплея: размеры из кон�
     window.poll_events();
 }
 
-TEST_CASE("headless не трогает GLFW: счётчик окон GLFW не растёт") {
+TEST_CASE("headless не трогает SDL: счётчик окон SDL не растёт") {
     const int before = Window::open_windows();
     Window window = headless();
     CHECK(Window::open_windows() == before);

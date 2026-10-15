@@ -4,7 +4,7 @@ add_executable(WorldRenderExample_01_data_sources 01_data_sources.cpp)
 target_link_libraries(WorldRenderExample_01_data_sources PRIVATE engine::WorldRender WorldRenderOptions)
 
 add_executable(WorldRenderExample_02_render_terrain_png 02_render_terrain_png.cpp)
-target_link_libraries(WorldRenderExample_02_render_terrain_png PRIVATE engine::WorldRenderTerrain engine::WindowSystem glfw WorldRenderOptions)
+target_link_libraries(WorldRenderExample_02_render_terrain_png PRIVATE engine::WorldRenderTerrain engine::WindowSystem WorldRenderOptions)
 
 if(WORLDRENDER_BUILD_TESTS)
     add_test(NAME WorldRender.example.01_data_sources COMMAND WorldRenderExample_01_data_sources)

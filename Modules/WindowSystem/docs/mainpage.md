@@ -1,11 +1,11 @@
 # WindowSystem — окно и платформа FluxEng {#mainpage}
 
 WindowSystem открывает окно, ведёт кадр и превращает события платформы в **собственные события ввода движка**
-(InputSystem). В заголовках модуля нет ни GLFW, ни glad: платформа — деталь бэкенда за интерфейсом `IWindowBackend`.
+(InputSystem). В заголовках модуля нет ни SDL, ни glad: платформа — деталь бэкенда за интерфейсом `IWindowBackend`.
 Подключение: `#include <WindowSystem/Window.hpp>`, CMake-цель `engine::WindowSystem` (тянет `engine::InputSystem`).
 
 ```
- ОС ─► IWindowBackend (GLFW | Headless | ваш) ─► InputEvent ─► Window ─► InputState (опрос за кадр)
+ ОС ─► IWindowBackend (SDL | Headless | ваш) ─► InputEvent ─► Window ─► InputState (опрос за кадр)
                                                                       └► WindowEvents (подписки)
 ```
 
@@ -29,9 +29,9 @@ WindowSystem::Window& window = *created;
 | `WindowBackend::Glfw` (по умолчанию) | окно ОС: Windows, Linux (X11, Wayland), macOS; контекст OpenGL или окно для Vulkan; геймпады | игра |
 | `WindowBackend::Headless` | окно без экрана: размеры из конфигурации, события только внедрённые, графики нет | CI без дисплея, выделенный сервер, автотесты ввода |
 
-Своя платформа (SDL, Android, консоль, веб) — ещё одна реализация `IWindowBackend` (`WindowSystem/Backend.hpp`): она переводит
-события ОС в `InputSystem::InputEvent`, остальной код не меняется. Коды клавиш GLFW переводятся **в одном месте**
-(`GlfwKeyMap.hpp`), и тест проверяет перевод для всех кодов GLFW (отображение полное и взаимно однозначное).
+Своя платформа (Android, консоль, веб) — ещё одна реализация `IWindowBackend` (`WindowSystem/Backend.hpp`): она переводит
+события ОС в `InputSystem::InputEvent`, остальной код не меняется. Коды клавиш SDL переводятся **в одном месте**
+(`SdlKeyMap.hpp`), и тест проверяет перевод для всех кодов SDL (отображение полное и взаимно однозначное).
 
 ## Кадр
 
@@ -65,18 +65,18 @@ window.events().key.unsubscribe(id);
 
 `inject(event)` и `inject_key / inject_mouse_button / inject_cursor / inject_scroll / inject_char` посылают событие **тем же путём**,
 что и ОС (состояние, затем подписчики). Так работают боты (Sandbox/CardDuel кликает мышью), автотесты и воспроизведение записи.
-Вместе с Headless-окном это даёт тесты игровой логики без дисплея, без GPU и без GLFW.
+Вместе с Headless-окном это даёт тесты игровой логики без дисплея, без GPU и без SDL.
 
 ## Геймпады
 
-Бэкенд GLFW опрашивает геймпады после `glfwPollEvents` и отдаёт только изменения: подключение, кнопки (раскладка «как у Xbox»),
+Бэкенд SDL получает геймпады событиями `SDL_EVENT_GAMEPAD_*` и отдаёт только изменения: подключение, кнопки (раскладка «как у Xbox»),
 оси (стики −1…+1, курки 0…1). Игрок — номер 0…3. Без железа ту же цепочку проверяют внедрённые `GamepadInput`.
 
 ## Графический API
 
 `ClientApi::OpenGL` — контекст OpenGL, функции загружены внутри окна; **заголовок glad подключайте сами** там, где вызываете GL.
 `ClientApi::None` — окно без контекста для Vulkan: `create_vulkan_surface(instance)` и `Window::vulkan_instance_extensions()`.
-`native_handle()` возвращает `void*` (у GLFW — `GLFWwindow*`); он нужен только коду, который сам говорит с платформой.
+`native_handle()` возвращает `void*` (у SDL — `SDL_Window*`); он нужен только коду, который сам говорит с платформой.
 
 ## ZII и перемещение
 
@@ -85,22 +85,22 @@ window.events().key.unsubscribe(id);
 
 ## Тесты без дисплея
 
-Headless-окно, Listeners и перевод кодов GLFW не требуют дисплея. Тесты окна GLFW создают скрытое окно, а без дисплея
+Headless-окно, Listeners и перевод кодов SDL не требуют дисплея. Тесты окна SDL создают скрытое окно, а без дисплея
 пропускаются с сообщением (для CI на Linux: `xvfb-run ctest`).
 
 ## Что изменилось по сравнению с прежней версией
 
 | Было | Стало |
 |---|---|
-| `Window.hpp` включал glad и GLFW; игры писали `GLFW_KEY_W` | заголовки без платформы; `InputSystem::Key::W` |
-| события `(int key, int action)` с кодами GLFW | `(Key, Transition)`: собственные стабильные коды |
+| `Window.hpp` включал glad и платформенные заголовки; игры писали `GLFW_KEY_W` | заголовки без платформы; `InputSystem::Key::W` |
+| события `(int key, int action)` с кодами платформы | `(Key, Transition)`: собственные стабильные коды |
 | `WindowSystem::InputState`, `action_press` | `InputSystem::InputState`, `Transition::Press` |
 | `native_handle()` возвращал `GLFWwindow*` | `void*` |
-| платформа одна (GLFW), дисплей обязателен | бэкенды GLFW и Headless, шов для новых |
+| платформа одна (GLFW), дисплей обязателен | бэкенды SDL3 и Headless, шов для новых (в этой ветке GLFW заменён на SDL3) |
 | геймпадов нет | подключение, кнопки, оси |
-| `Window::time()` через `glfwGetTime` | монотонные часы, не зависят от платформы |
+| `Window::time()` через `sdlGetTime` | монотонные часы, не зависят от платформы |
 
 ## Примеры
 
-- @ref 01_window_input.cpp — окно GLFW, опрос и подписки
+- @ref 01_window_input.cpp — окно SDL, опрос и подписки
 - @ref 02_input_replay.cpp — Headless-окно, запись и воспроизведение ввода

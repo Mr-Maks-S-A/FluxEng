@@ -13,9 +13,9 @@ if(RENDERERSYSTEM_BUILD_TESTS)
 endif()
 
 if(TARGET engine::WindowSystem)
-    renderersystem_add_example(01_window_sprites engine::WindowSystem glfw)
-    renderersystem_add_example(02_offscreen_png engine::WindowSystem glfw)
-    renderersystem_add_example(04_scene_3d engine::WindowSystem glfw)
+    renderersystem_add_example(01_window_sprites engine::WindowSystem)
+    renderersystem_add_example(02_offscreen_png engine::WindowSystem)
+    renderersystem_add_example(04_scene_3d engine::WindowSystem)
 
     if(RENDERERSYSTEM_BUILD_TESTS)
         # Smoke-тесты с GPU: окно на 120 кадров и рендер в PNG.
@@ -31,7 +31,7 @@ if(TARGET engine::WindowSystem)
         set_tests_properties(RendererSystem.example.01_window_sprites RendererSystem.example.02_offscreen_png
                              RendererSystem.example.04_scene_3d PROPERTIES LABELS "gpu")
         if(RENDERERSYSTEM_SANITIZE)
-            # Window::~Window вызывает glfwTerminate, драйвер GPU выгружается раньше отчёта
+            # Window::~Window вызывает SDL_Quit, драйвер GPU выгружается раньше отчёта
             # LeakSanitizer, и его внутренние аллокации (и fontconfig) выглядят как утечки.
             # Это не код модуля; утечки RendererSystem проверяют юнит-тесты.
             set_tests_properties(RendererSystem.example.01_window_sprites RendererSystem.example.02_offscreen_png

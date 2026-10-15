@@ -14,6 +14,7 @@ public:
 
     void poll_events() override {}
     void swap_buffers() override {}
+    void make_current() noexcept override {}
     [[nodiscard]] bool should_close() const noexcept override { return m_close; }
     void request_close() noexcept override { m_close = true; }
     void set_title(const std::string&) override {}

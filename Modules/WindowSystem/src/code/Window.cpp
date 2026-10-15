@@ -16,7 +16,7 @@ struct Window::Impl final : IBackendSink {
     bool vsync = true;
     bool close_on_escape = false;
     ClientApi api = ClientApi::OpenGL;
-    WindowBackend kind = WindowBackend::Glfw;
+    WindowBackend kind = WindowBackend::Sdl;
     CursorMode cursor_mode = CursorMode::Normal;
     InputState input;
     WindowEvents events;
@@ -53,7 +53,7 @@ Window::Window() noexcept = default;
 
 std::expected<Window, std::string> Window::create(const WindowConfig& config) {
     auto impl = std::make_unique<Impl>();
-    BackendResult backend = config.backend == WindowBackend::Headless ? create_headless_backend(config, *impl) : create_glfw_backend(config, *impl);
+    BackendResult backend = config.backend == WindowBackend::Headless ? create_headless_backend(config, *impl) : create_sdl_backend(config, *impl);
     if (!backend) return std::unexpected(std::move(backend.error()));
 
     impl->backend = std::move(*backend);
@@ -86,6 +86,10 @@ void Window::poll_events() {
     if (!m_impl || !m_impl->backend) return;
     m_impl->input.begin_frame();
     m_impl->backend->poll_events();
+}
+
+void Window::make_current() noexcept {
+    if (m_impl && m_impl->backend && m_impl->api == ClientApi::OpenGL) m_impl->backend->make_current();
 }
 
 void Window::swap_buffers() {
@@ -164,15 +168,15 @@ void Window::set_cursor_mode(CursorMode mode) noexcept {
 
 CursorMode Window::cursor_mode() const noexcept { return m_impl ? m_impl->cursor_mode : CursorMode::Normal; }
 ClientApi Window::api() const noexcept { return m_impl ? m_impl->api : ClientApi::OpenGL; }
-WindowBackend Window::backend() const noexcept { return m_impl ? m_impl->kind : WindowBackend::Glfw; }
+WindowBackend Window::backend() const noexcept { return m_impl ? m_impl->kind : WindowBackend::Sdl; }
 
-std::vector<std::string> Window::vulkan_instance_extensions() { return glfw_vulkan_instance_extensions(); }
+std::vector<std::string> Window::vulkan_instance_extensions() { return sdl_vulkan_instance_extensions(); }
 
 std::expected<std::uint64_t, std::string> Window::create_vulkan_surface(std::uintptr_t instance) const {
     if (!m_impl || !m_impl->backend) return std::unexpected(std::string("window is not created"));
     return m_impl->backend->create_vulkan_surface(instance);
 }
 
-int Window::open_windows() noexcept { return glfw_open_windows(); }
+int Window::open_windows() noexcept { return sdl_open_windows(); }
 
 } // namespace WindowSystem

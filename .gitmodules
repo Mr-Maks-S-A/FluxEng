@@ -7,12 +7,12 @@
 [submodule "ExternalLibrary/doctest"]
 	path = ExternalLibrary/doctest
 	url = git@github.com:doctest/doctest.git
-[submodule "ExternalLibrary/glfw"]
-	path = ExternalLibrary/glfw
-	url = git@github.com:glfw/glfw.git
 [submodule "ExternalLibrary/glm"]
 	path = ExternalLibrary/glm
 	url = git@github.com:g-truc/glm.git
 [submodule "ExternalLibrary/benchmark"]
 	path = ExternalLibrary/benchmark
 	url = git@github.com:google/benchmark.git
+[submodule "ExternalLibrary/SDL"]
+	path = ExternalLibrary/SDL
+	url = https://github.com/libsdl-org/SDL.git

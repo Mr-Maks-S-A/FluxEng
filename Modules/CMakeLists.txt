@@ -9,7 +9,8 @@ add_subdirectory( EventSystem )
 add_subdirectory( RuntimeSystem )    # ядро без графики: тик, модули, шина, задачи, память
 add_subdirectory( InputSystem )      # ввод: собственные коды, состояние, ActionMap, команда ввода, запись
 add_subdirectory( AssetSystem )      # ассеты: VFS, пак, PNG/JPG, glTF, менеджер с кешем и фоновой загрузкой
-add_subdirectory( WindowSystem )
+add_subdirectory( WindowSystem )     # окно, события, ввод платформы (SDL3)
+add_subdirectory( AudioSystem )      # звук: сэмплы, синтез, микшер, вывод через SDL3
 add_subdirectory( ECSSystem )
 add_subdirectory( RendererSystem )
 # Игровой слой «Первого заклинания» (пре-альфа): числа, запись, ландшафт, мана, руны, персонаж, симуляция, отрисовка.
@@ -36,7 +37,7 @@ add_subdirectory( Core )           # слой приложения: зависи
 #   engine::Foundation    Math, MemorySystem, JobSystem, Phases      числа, память, потоки, расписание тика
 #   engine::Simulation    Foundation + EventSystem, ECSSystem,       детерминированное ядро: события, сущности,
 #                         Replay, EventLog, Net                      запись/повтор, журнал с избыточностью, сеть lockstep
-#   engine::Platform      WindowSystem, RendererSystem, Core         окно, графика, каркас приложения
+#   engine::Platform      WindowSystem, AudioSystem, RendererSystem, Core   окно, звук, графика, каркас приложения
 #   engine::Gameplay      Simulation + Terrain, ManaField, Runes,    правила мира заклинаний
 #                         RuneEditor, Character, Progress, SpellSim, Challenge
 #   engine::Presentation  Platform + WorldRender (+ адаптеры),        отрисовка мира и редактора рун
@@ -53,7 +54,7 @@ target_link_libraries(FluxSimulation INTERFACE engine::Foundation engine::EventS
 
 add_library(FluxPlatform INTERFACE)
 add_library(engine::Platform ALIAS FluxPlatform)
-target_link_libraries(FluxPlatform INTERFACE engine::WindowSystem engine::RendererSystem engine::Core)
+target_link_libraries(FluxPlatform INTERFACE engine::WindowSystem engine::AudioSystem engine::RendererSystem engine::Core)
 
 add_library(FluxGameplay INTERFACE)
 add_library(engine::Gameplay ALIAS FluxGameplay)

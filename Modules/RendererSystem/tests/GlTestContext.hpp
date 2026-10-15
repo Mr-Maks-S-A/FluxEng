@@ -8,8 +8,7 @@
  */
 
 #include <glad/glad.h>
-// glad должен идти раньше GLFW
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
 
 namespace RendererTests {
 
@@ -26,45 +25,39 @@ public:
 
     /// @brief Снова сделать контекст текущим (если между тестами его сменили).
     void make_current() const noexcept {
-        if (m_window != nullptr) glfwMakeContextCurrent(m_window);
+        if (m_window != nullptr) SDL_GL_MakeCurrent(m_window, m_context);
     }
 
     GlTestContext(const GlTestContext&) = delete;
     GlTestContext& operator=(const GlTestContext&) = delete;
 
-    // Деструктора нет намеренно: glfwTerminate() из статического деструктора на Wayland
-    // (libdecor/GTK) иногда зависает, а выгрузка драйвера до отчёта LeakSanitizer
-    // превращает его внутренние аллокации в «утечки неизвестного модуля».
-    // Окно и контекст освобождает ОС при завершении процесса.
+    // Деструктора нет намеренно: выгрузка драйвера до отчёта LeakSanitizer превращает его внутренние аллокации
+    // в «утечки неизвестного модуля». Окно и контекст освобождает ОС при завершении процесса.
     ~GlTestContext() = default;
 
 private:
     GlTestContext() {
-#if defined(GLFW_PLATFORM_X11)
-        // На Linux предпочитаем X11 (в том числе XWayland): скрытое окно без декораций GTK.
-        if (glfwPlatformSupported(GLFW_PLATFORM_X11) == GLFW_TRUE) {
-            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
-        }
-#endif
-        m_glfw_initialized = glfwInit() == GLFW_TRUE;
-        if (!m_glfw_initialized) {
+        if (!SDL_Init(SDL_INIT_VIDEO)) {
             return;
         }
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-        m_window = glfwCreateWindow(64, 64, "RendererSystem tests", nullptr, nullptr);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+        m_window = SDL_CreateWindow("RendererSystem tests", 64, 64, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
         if (m_window == nullptr) {
             return;
         }
-        glfwMakeContextCurrent(m_window);
-        m_available = gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)) != 0;
+        m_context = SDL_GL_CreateContext(m_window);
+        if (m_context == nullptr) {
+            return;
+        }
+        SDL_GL_MakeCurrent(m_window, m_context);
+        m_available = gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress)) != 0;
     }
 
-    GLFWwindow* m_window = nullptr;
-    bool m_glfw_initialized = false;
+    SDL_Window* m_window = nullptr;
+    SDL_GLContext m_context = nullptr;
     bool m_available = false;
 };
 

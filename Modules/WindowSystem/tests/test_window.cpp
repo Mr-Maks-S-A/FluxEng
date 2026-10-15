@@ -48,7 +48,7 @@ TEST_CASE("создание: размеры, заголовок, vsync, закр
     CHECK(open_before >= 1);
 
     CHECK(window->native_handle() != nullptr);
-    CHECK(window->backend() == WindowSystem::WindowBackend::Glfw);
+    CHECK(window->backend() == WindowSystem::WindowBackend::Sdl);
     CHECK(window->title() == "test");
     CHECK(window->window_size().width == 320);
     CHECK(window->framebuffer_size().width > 0);
@@ -65,7 +65,7 @@ TEST_CASE("создание: размеры, заголовок, vsync, закр
     CHECK(window->should_close());
 }
 
-TEST_CASE("счётчик окон: закрытие последнего завершает GLFW, повторное создание работает") {
+TEST_CASE("счётчик окон: закрытие последнего опускает видео SDL, повторное создание работает") {
     {
         auto a = hidden_window();
         if (!a) return;

@@ -35,7 +35,7 @@ add_executable(IntegrationTests
     integration/test_app_modules.cpp
     integration/test_input_lockstep.cpp
 )
-target_link_libraries(IntegrationTests PRIVATE engine::Core engine::InputSystem engine::RuntimeSystem engine::ECSSystem engine::Net engine::Challenge glfw glad CardDuelRules doctest::doctest)
+target_link_libraries(IntegrationTests PRIVATE engine::Core engine::InputSystem engine::RuntimeSystem engine::ECSSystem engine::Net engine::Challenge glad CardDuelRules doctest::doctest)
 target_compile_features(IntegrationTests PRIVATE cxx_std_23)
 if(MSVC)
     target_compile_options(IntegrationTests PRIVATE /W4 /utf-8)

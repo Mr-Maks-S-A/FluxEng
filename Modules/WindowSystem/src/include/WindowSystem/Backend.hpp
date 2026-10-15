@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file Backend.hpp
- * @brief Шов платформы: интерфейс бэкенда окна. Другая платформа (SDL, Android, консоль, веб) — ещё одна реализация.
+ * @brief Шов платформы: интерфейс бэкенда окна. Другая платформа (Android, консоль, веб) — ещё одна реализация.
  *
  * Window — фасад: хранит состояние ввода (InputSystem::InputState), рассылает события подписчикам и просит бэкенд
  * сделать то, что умеет только ОС. Бэкенд делает три вещи:
@@ -10,7 +10,7 @@
  *  2. отвечает на запросы окна: размеры, заголовок, курсор, vsync, поверхность Vulkan;
  *  3. владеет ресурсами платформы (дескриптор окна, контекст).
  *
- * Встроенные реализации: GLFW (`create_glfw_backend`) и Headless (`create_headless_backend`).
+ * Встроенные реализации: SDL3 (`create_sdl_backend`) и Headless (`create_headless_backend`).
  */
 
 #include <InputSystem/Events.hpp>
@@ -40,6 +40,8 @@ public:
     /// @brief Забрать события платформы и отдать их приёмнику (по порядку).
     virtual void poll_events() = 0;
     virtual void swap_buffers() = 0;
+    /// @brief Сделать контекст OpenGL окна текущим в этом потоке (у окон без OpenGL ничего не делает).
+    virtual void make_current() noexcept = 0;
 
     [[nodiscard]] virtual bool should_close() const noexcept = 0;
     virtual void request_close() noexcept = 0;
@@ -54,21 +56,21 @@ public:
     /// @brief Положение курсора сейчас, в пикселях окна (для начального состояния ввода).
     [[nodiscard]] virtual InputSystem::Vec2d cursor_position() const noexcept = 0;
 
-    /// @brief Платформенный дескриптор (для GLFW — GLFWwindow*); nullptr, если его нет.
+    /// @brief Платформенный дескриптор (для SDL — SDL_Window*); nullptr, если его нет.
     [[nodiscard]] virtual void* native_handle() const noexcept = 0;
     [[nodiscard]] virtual std::expected<std::uint64_t, std::string> create_vulkan_surface(std::uintptr_t instance) const = 0;
 };
 
 using BackendResult = std::expected<std::unique_ptr<IWindowBackend>, std::string>;
 
-/// @brief Окно ОС через GLFW (и контекст OpenGL, если config.api == OpenGL).
-[[nodiscard]] BackendResult create_glfw_backend(const WindowConfig& config, IBackendSink& sink);
+/// @brief Окно ОС через SDL3 (и контекст OpenGL, если config.api == OpenGL).
+[[nodiscard]] BackendResult create_sdl_backend(const WindowConfig& config, IBackendSink& sink);
 /// @brief Окно без экрана: события только внедрённые, графики нет.
 [[nodiscard]] BackendResult create_headless_backend(const WindowConfig& config, IBackendSink& sink);
 
-/// @brief Расширения экземпляра Vulkan, нужные платформе (пусто, пока GLFW не инициализирован или нет загрузчика Vulkan).
-[[nodiscard]] std::vector<std::string> glfw_vulkan_instance_extensions();
-/// @brief Сколько окон GLFW открыто (GLFW инициализируется с первым и завершается с последним).
-[[nodiscard]] int glfw_open_windows() noexcept;
+/// @brief Расширения экземпляра Vulkan, нужные платформе (пусто, пока SDL не инициализирован или нет загрузчика Vulkan).
+[[nodiscard]] std::vector<std::string> sdl_vulkan_instance_extensions();
+/// @brief Сколько окон SDL открыто (видео SDL поднимается с первым и опускается с последним).
+[[nodiscard]] int sdl_open_windows() noexcept;
 
 } // namespace WindowSystem

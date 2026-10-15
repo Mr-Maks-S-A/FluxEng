@@ -12,7 +12,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/FluxModule.cmake")
 # Игра реализует Core::Game и запускается через Core::run<G>().
 #
 # Зависимости: RuntimeSystem (ядро без графики), MemorySystem (память тика и кадра), JobSystem (потоки для систем игры), EventSystem,
-# RendererSystem (2D, 3D, шрифт интерфейса, скриншот в PNG), WindowSystem, InputSystem (коды и состояние ввода). GLFW Core не нужен.
+# RendererSystem (2D, 3D, шрифт интерфейса, скриншот в PNG), WindowSystem, InputSystem (коды и состояние ввода). SDL Core не нужен.
 # ==============================================================================
 flux_module_option(CORE_BUILD_EXAMPLES "Собирать примеры Core")
 flux_module_option(CORE_BUILD_TESTS "Собирать тесты Core")

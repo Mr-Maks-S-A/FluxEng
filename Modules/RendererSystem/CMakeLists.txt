@@ -37,7 +37,7 @@ endif()
 # Библиотека
 #
 # Зависимости: только glm, glad и stb (stb_image, stb_image_write, stb_truetype,
-# stb_rect_pack, stb_easy_font, stb_perlin). Окно и GLFW библиотеке не нужны —
+# stb_rect_pack, stb_easy_font, stb_perlin). Окно и SDL библиотеке не нужны —
 # ей достаточно текущего OpenGL-контекста. Сторонние библиотеки подключены
 # как SYSTEM (см. flux_external), их предупреждения не смешиваются с нашими.
 # ==============================================================================
@@ -106,13 +106,13 @@ target_link_libraries(RendererSystem
 if(RENDERERSYSTEM_BUILD_TESTS)
     enable_testing()
     flux_external(doctest)
-    flux_external(glfw)
+    flux_external(sdl)
     add_subdirectory(tests)
 endif()
 
 if(RENDERERSYSTEM_BUILD_BENCHMARKS)
     flux_external(benchmark)
-    flux_external(glfw)
+    flux_external(sdl)
     add_subdirectory(benchmarks)
 endif()
 

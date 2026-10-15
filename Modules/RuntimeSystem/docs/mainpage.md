@@ -1,7 +1,7 @@
 # RuntimeSystem — ядро игры без графики {#mainpage}
 
 RuntimeSystem — то, что нужно и клиенту, и **выделенному серверу**: шина событий, планировщик задач, арены тика
-и кадра, фиксированный шаг симуляции и **модули с жизненным циклом**. Здесь нет ни окна, ни GPU, ни GLFW —
+и кадра, фиксированный шаг симуляции и **модули с жизненным циклом**. Здесь нет ни окна, ни GPU, ни SDL —
 модуль собирается и тестируется сам по себе (`cmake -S Modules/RuntimeSystem`).
 Подключение: `#include <RuntimeSystem/RuntimeSystem.hpp>`, CMake-цель `engine::RuntimeSystem`.
 Зависимости: MemorySystem, JobSystem, EventSystem.

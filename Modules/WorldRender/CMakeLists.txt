@@ -56,6 +56,6 @@ endif()
 
 if(WORLDRENDER_BUILD_EXAMPLES)
     flux_module(WindowSystem)
-    flux_external(glfw)
+    flux_external(sdl)
     add_subdirectory(examples)
 endif()

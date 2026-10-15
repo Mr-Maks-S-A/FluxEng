@@ -2,7 +2,7 @@
 /**
  * @file Types.hpp
  * @brief Общие типы окна: размер, графический API, режим курсора, бэкенд платформы, параметры создания.
- * Ни GLFW, ни glad, ни других платформенных заголовков здесь нет и быть не должно.
+ * Ни SDL, ни glad, ни других платформенных заголовков здесь нет и быть не должно.
  */
 
 #include <cstdint>
@@ -32,7 +32,7 @@ enum class CursorMode : std::uint8_t {
 
 /// @brief Платформа, на которой живёт окно.
 enum class WindowBackend : std::uint8_t {
-    Glfw,     ///< Настоящее окно ОС (GLFW): Windows, Linux (X11, Wayland), macOS.
+    Sdl,      ///< Настоящее окно ОС (SDL3): Windows, Linux (X11, Wayland), macOS.
     Headless, ///< Окно без экрана: размеры из конфигурации, события только внедрённые. Нужен CI, серверу, автотестам ввода; графики нет.
 };
 
@@ -49,7 +49,7 @@ struct WindowConfig {
     int samples = 0;               ///< MSAA; 0 — выключено.
     bool close_on_escape = false;  ///< Закрывать окно по Esc (удобно для примеров; в игре решает она сама).
     ClientApi api = ClientApi::OpenGL; ///< OpenGL-контекст или окно для Vulkan. Headless всегда без графики.
-    WindowBackend backend = WindowBackend::Glfw; ///< Платформа.
+    WindowBackend backend = WindowBackend::Sdl; ///< Платформа.
 };
 
 } // namespace WindowSystem

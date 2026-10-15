@@ -1,7 +1,7 @@
 # ==============================================================================
 # Юнит-тесты (doctest)
 #
-# CPU-тесты работают везде. GPU-тесты (test_gl.cpp) создают скрытое окно GLFW;
+# CPU-тесты работают везде. GPU-тесты (test_gl.cpp) создают скрытое окно SDL;
 # если OpenGL 3.3 недоступен, они пропускаются с сообщением, а не падают.
 # ==============================================================================
 add_executable(RendererSystemTests
@@ -19,7 +19,7 @@ target_link_libraries(RendererSystemTests PRIVATE
     engine::RendererSystem
     RendererSystemOptions
     doctest::doctest
-    glfw
+    SDL3::SDL3
     stb
 )
 

@@ -4,7 +4,7 @@
 ввод как события и как **действия**, отладка (граф событий, F1). Игра — наследник `Core::Game` и одна строка в `main()`.
 
 Подключение: `#include <Core/Core.hpp>`, цель `engine::Core`. Зависит от всех «системных» модулей: MemorySystem, JobSystem,
-EventSystem, RendererSystem, WindowSystem (и GLFW для кодов клавиш).
+EventSystem, RendererSystem, WindowSystem (и SDL для кодов клавиш).
 
 ```cpp
 class MyGame final : public Core::Game {
